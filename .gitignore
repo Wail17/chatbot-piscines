@@ -1,17 +1,18 @@
-# --- Données et index locaux (NE PAS COMMIT par défaut)
+# --- Données locales (tout ignorer par défaut)
 app/store/chroma/
 app/store/feedback/
 app/store/raw_docs/
 app/data/**
 
-# Autoriser SEULEMENT nos petits exemples sous app/data/all
+# Réautoriser uniquement app/data/all/**
 !app/data/
 !app/data/all/
 !app/data/all/**
 
-# Si plus haut on ignore les PDF/DOCX, on les ré-autorise pour /all/
+# Ces deux règles ignorent pdf/docx partout...
 app/**/*.pdf
 app/**/*.docx
+# ...mais on les réautorise dans app/data/all
 !app/data/all/**/*.pdf
 !app/data/all/**/*.docx
 !app/data/all/**/*.txt
