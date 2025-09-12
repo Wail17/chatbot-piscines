@@ -65,14 +65,13 @@ def _uniq_add(acc: list, seen: set, docs) -> bool:
             return True
     return False
 
-
 def retrieve(question: str):
     """
-    Stratégie robuste :
-      1) Génère 2–3 reformulations de la question.
-      2) Pour chaque requête, cherche d'abord dans source_type='faq' (si présent),
-         puis globalement (tous types).
-      3) MMR pour la diversité, fallback similarity si besoin.
+    Strategy:
+      - Expand the question with a few short variants.
+      - First search in sources tagged as 'faq' or 'mixed' (preferred),
+        then fall back to global search.
+      - Use MMR; fall back to similarity on error.
     """
     vs = _get_vs()
     results, seen = [], set()
@@ -87,15 +86,20 @@ def retrieve(question: str):
             except Exception:
                 return []
 
-    # 1) Préférence FAQ
+    # 1) Prefer FAQ (+ mixed)
     for q in queries:
-        docs = mmr(q, k=min(4, TOP_K), fetch_k=max(30, TOP_K * 6), flt={"source_type": "faq"})
+        docs = mmr(
+            q,
+            k=TOP_K,                          # take more candidates
+            fetch_k=max(40, TOP_K * 8),       # widen the pool so we catch the steps
+            flt={"source_type": {"$in": ["faq", "mixed"]}}
+        )
         if _uniq_add(results, seen, docs):
             return results
 
-    # 2) Global
+    # 2) Global fallback
     for q in queries:
-        docs = mmr(q, k=TOP_K, fetch_k=max(30, TOP_K * 6))
+        docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8))
         if _uniq_add(results, seen, docs):
             return results
 
@@ -176,7 +180,8 @@ def _build_messages(question: str, docs) -> list:
         f"{lang_rule}\n"
         "Use ONLY the provided context to answer. If the context is insufficient, say it and ask a short, "
         "clear clarifying question instead of hallucinating.\n"
-        "Keep answers concise and helpful."
+        "Keep answers concise and helpful.\n"
+        "Whenever the context contains a procedure or numbered steps (e.g., Step 1/2/3), reproduce them clearly as an ordered list using the exact terms found in the context (e.g., Snippet, Scheduler). Do not generalize; stick closely to the provided instructions.\n"
     )
 
     user = f"QUESTION:\n{question}\n\nCONTEXT (excerpts):\n{context}"
