@@ -65,13 +65,25 @@ def _uniq_add(acc: list, seen: set, docs) -> bool:
             return True
     return False
 
+
+def _expand_neighbors(vs: Chroma, doc, k: int = 3):
+    """Bring a few neighboring chunks from the same source to capture steps around the hit."""
+    try:
+        src = (doc.metadata or {}).get("source")
+        if not src:
+            return []
+        return vs.similarity_search(doc.page_content, k=k, filter={"source": src})
+    except Exception:
+        return []
+
+
 def retrieve(question: str):
     """
-    Strategy:
-      - Expand the question with a few short variants.
-      - First search in sources tagged as 'faq' or 'mixed' (preferred),
-        then fall back to global search.
-      - Use MMR; fall back to similarity on error.
+    - Expand question with a few variants.
+    - Prefer sources tagged as 'faq' or 'mixed'.
+    - Use MMR; if it fails, fall back to similarity.
+    - For each hit, also add a few neighbors from the same file
+      (so we capture numbered steps that are split across chunks).
     """
     vs = _get_vs()
     results, seen = [], set()
@@ -86,25 +98,34 @@ def retrieve(question: str):
             except Exception:
                 return []
 
+    def add_with_neighbors(docs):
+        # add doc, then 2–3 neighbors from the same source
+        for d in docs or []:
+            if _uniq_add(results, seen, [d]):
+                return True
+            neigh = _expand_neighbors(vs, d, k=3)
+            if _uniq_add(results, seen, neigh):
+                return True
+        return False
+
     # 1) Prefer FAQ (+ mixed)
     for q in queries:
         docs = mmr(
             q,
-            k=TOP_K,                          # take more candidates
-            fetch_k=max(40, TOP_K * 8),       # widen the pool so we catch the steps
+            k=TOP_K,                        # take more
+            fetch_k=max(40, TOP_K * 8),     # widen candidate pool
             flt={"source_type": {"$in": ["faq", "mixed"]}}
         )
-        if _uniq_add(results, seen, docs):
+        if add_with_neighbors(docs):
             return results
 
     # 2) Global fallback
     for q in queries:
         docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8))
-        if _uniq_add(results, seen, docs):
+        if add_with_neighbors(docs):
             return results
 
     return results
-
 
 
 
