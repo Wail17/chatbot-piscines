@@ -1,21 +1,17 @@
-# --- Python / venv / IDE
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.env
-*.log
-.DS_Store
-Thumbs.db
-.vscode/
-
-# --- Données et index locaux (NE PAS COMMIT)
+# --- Données et index locaux (NE PAS COMMIT par défaut)
 app/store/chroma/
 app/store/feedback/
 app/store/raw_docs/
-app/data/
+app/data/**
+
+# Autoriser SEULEMENT nos petits exemples sous app/data/all
+!app/data/
+!app/data/all/
+!app/data/all/**
+
+# Si plus haut on ignore les PDF/DOCX, on les ré-autorise pour /all/
 app/**/*.pdf
 app/**/*.docx
-
-# --- OS / divers
-*.tmp
+!app/data/all/**/*.pdf
+!app/data/all/**/*.docx
+!app/data/all/**/*.txt
