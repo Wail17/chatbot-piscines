@@ -176,9 +176,7 @@ def _build_messages(question: str, docs) -> list:
         f"{lang_rule}\n"
         "Use ONLY the provided context to answer. If the context is insufficient, say it and ask a short, "
         "clear clarifying question instead of hallucinating.\n"
-        "Keep answers concise and helpful.\n"
-        "At the end of the answer, add a short 'Sources :' section listing the titles/filenames used. "
-        "If none were used, say 'Aucune source utilisée.'"
+        "Keep answers concise and helpful."
     )
 
     user = f"QUESTION:\n{question}\n\nCONTEXT (excerpts):\n{context}"
