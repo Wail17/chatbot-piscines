@@ -1,0 +1,32 @@
+# API
+fastapi
+uvicorn[standard]
+python-dotenv
+
+# OpenAI
+openai>=1.0.0,<2.0.0
+
+# Chaîne RAG (recherche + vecteurs)
+langchain>=0.2
+langchain-community>=0.2
+chromadb>=0.5
+
+# Parseurs de fichiers
+pypdf
+python-docx
+beautifulsoup4
+lxml
+markdownify
+
+# Utilitaires LLM
+tiktoken
+httpx
+tenacity
+
+# (Optionnel) pour un reranker ou des métriques sémantiques
+
+langchain-openai>=0.1.7
+
+# sentence-transformers
+
+# scikit-learn

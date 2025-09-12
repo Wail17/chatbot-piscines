@@ -1,0 +1,21 @@
+# --- Python / venv / IDE
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+
+# --- Données et index locaux (NE PAS COMMIT)
+app/store/chroma/
+app/store/feedback/
+app/store/raw_docs/
+app/data/
+app/**/*.pdf
+app/**/*.docx
+
+# --- OS / divers
+*.tmp
