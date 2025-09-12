@@ -1,18 +1,30 @@
-# --- Données locales (tout ignorer par défaut)
+# --- Python / venv / IDE
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- Données locales : IGNORER TOUT par défaut
 app/store/chroma/
 app/store/feedback/
 app/store/raw_docs/
 app/data/**
 
-# Réautoriser uniquement app/data/all/**
+# --- Réautoriser uniquement app/data/all/**
 !app/data/
 !app/data/all/
 !app/data/all/**
 
-# Ces deux règles ignorent pdf/docx partout...
+# --- On ignorait pdf/docx partout dans app...
 app/**/*.pdf
 app/**/*.docx
-# ...mais on les réautorise dans app/data/all
+# --- ...mais on les autorise dans /all
 !app/data/all/**/*.pdf
 !app/data/all/**/*.docx
 !app/data/all/**/*.txt
