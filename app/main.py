@@ -17,19 +17,13 @@ ALLOWED_ORIGINS = [
     "https://web-production-e8b3b.up.railway.app",  # Railway public URL
 ]
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=[
-        "Content-Type",
-        "ngrok-skip-browser-warning",
-        "Authorization",
-        "Accept",
-        "Origin",
-    ],
-    expose_headers=["Content-Type"],
+    allow_origins=["*"],      # TEMPORAIRE
+    allow_credentials=False,  # si "*" -> False
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --------- Models ----------
