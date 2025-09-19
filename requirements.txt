@@ -3,12 +3,13 @@ fastapi
 uvicorn[standard]
 python-dotenv
 
-# OpenAI
+# OpenAI SDK
 openai>=1.0.0,<2.0.0
 
-# Chaîne RAG (recherche + vecteurs)
+# Chaîne RAG
 langchain>=0.2
 langchain-community>=0.2
+langchain-openai>=0.1.7
 chromadb>=0.5
 
 # Parseurs de fichiers
@@ -17,26 +18,12 @@ python-docx
 beautifulsoup4
 lxml
 markdownify
-<<<<<<< HEAD
-=======
+
+# Excel
 pandas
 openpyxl
 
->>>>>>> 9ac38f6 (push from clean folder (no OneDrive, remove NUL))
-
-# Utilitaires LLM
+# Utilitaires
 tiktoken
 httpx
 tenacity
-
-# (Optionnel) pour un reranker ou des métriques sémantiques
-
-langchain-openai>=0.1.7
-
-# sentence-transformers
-
-# scikit-learn
-<<<<<<< HEAD
-=======
-mammoth
->>>>>>> 9ac38f6 (push from clean folder (no OneDrive, remove NUL))
