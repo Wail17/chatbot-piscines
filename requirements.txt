@@ -17,6 +17,12 @@ python-docx
 beautifulsoup4
 lxml
 markdownify
+<<<<<<< HEAD
+=======
+pandas
+openpyxl
+
+>>>>>>> 9ac38f6 (push from clean folder (no OneDrive, remove NUL))
 
 # Utilitaires LLM
 tiktoken
@@ -30,3 +36,7 @@ langchain-openai>=0.1.7
 # sentence-transformers
 
 # scikit-learn
+<<<<<<< HEAD
+=======
+mammoth
+>>>>>>> 9ac38f6 (push from clean folder (no OneDrive, remove NUL))

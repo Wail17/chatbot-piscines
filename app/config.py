@@ -23,7 +23,11 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 # --- RAG ---
 MAX_CHUNK_TOKENS = int(os.getenv("MAX_CHUNK_TOKENS", "500"))
 CHUNK_OVERLAP_TOKENS = int(os.getenv("CHUNK_OVERLAP_TOKENS", "80"))
+<<<<<<< HEAD
 TOP_K = int(os.getenv("TOP_K", "8"))
+=======
+TOP_K = int(os.getenv("TOP_K", "5"))
+>>>>>>> 9ac38f6 (push from clean folder (no OneDrive, remove NUL))
 RESPONSE_LANGUAGE = os.getenv("RESPONSE_LANGUAGE", "auto")
 
 # --- Feedback / corrections ---

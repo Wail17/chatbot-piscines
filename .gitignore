@@ -8,6 +8,7 @@ venv/
 .DS_Store
 Thumbs.db
 .vscode/
+<<<<<<< HEAD
 .idea/
 
 # --- Données locales : IGNORER TOUT par défaut
@@ -28,3 +29,16 @@ app/**/*.docx
 !app/data/all/**/*.pdf
 !app/data/all/**/*.docx
 !app/data/all/**/*.txt
+=======
+
+# --- Données et index locaux (NE PAS COMMIT)
+app/store/chroma/
+app/store/feedback/
+app/store/raw_docs/
+app/data/
+app/**/*.pdf
+app/**/*.docx
+
+# --- OS / divers
+*.tmp
+>>>>>>> 9ac38f6 (push from clean folder (no OneDrive, remove NUL))
