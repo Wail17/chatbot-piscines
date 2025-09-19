@@ -1,6 +1,6 @@
 # app/ingest.py
 import os
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -20,7 +20,7 @@ from .config import (
     COLLECTION_NAME,
 )
 
-# ---------- Helpers loaders ----------
+# ---------- Loaders texte classiques ----------
 def _load_pdf_pages(path: str) -> List[Tuple[str, int]]:
     out: List[Tuple[str, int]] = []
     try:
@@ -49,103 +49,23 @@ def _load_html(path: str) -> str:
 def _load_txt(path: str) -> str:
     return open(path, "r", encoding="utf-8", errors="ignore").read()
 
-# ---------- Excel (FAQ) ----------
-def _normalize_yes(x: Any) -> bool:
-    if x is None:
-        return False
-    s = str(x).strip().lower()
-    return s in {"x", "✓", "true", "1", "yes", "oui"}
+# ---------- Splitter ----------
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=MAX_CHUNK_TOKENS,
+    chunk_overlap=CHUNK_OVERLAP_TOKENS,
+    separators=["\n\n", "\n", ". ", " "],
+)
 
-def _ingest_excel(path: str, source_type: str = "faq") -> Dict[str, int]:
-    """
-    Lis un Excel avec colonnes du type:
-      - Categorie / Category (facultatif)
-      - Vraag ou Question
-      - Antwoord ou Answer
-      - Gen 1 / Gen1 / Gen 2 / Gen2 / Gen 3 (cases cochées)
-    Chaque ligne devient un document, et on encode dans metadata['gens'] = ['gen1', 'gen2', ...]
-    """
-    df = pd.read_excel(path)
-
-    # mapping colonnes possibles
-    col_q = None
-    for k in ["Vraag", "Question", "vraag", "question"]:
-        if k in df.columns: col_q = k; break
-    col_a = None
-    for k in ["Antwoord", "Answer", "antwoord", "answer"]:
-        if k in df.columns: col_a = k; break
-
-    if not col_q or not col_a:
-        return {"indexed_files": 0, "indexed_chunks": 0}
-
-    col_cat = None
-    for k in ["Categorie", "Category", "categorie", "category"]:
-        if k in df.columns: col_cat = k; break
-
-    gen_cols = {
-        "gen1": [c for c in df.columns if c.strip().lower() in {"gen 1", "gen1"}],
-        "gen2": [c for c in df.columns if c.strip().lower() in {"gen 2", "gen2"}],
-        "gen3": [c for c in df.columns if c.strip().lower() in {"gen 3", "gen3"}],
-    }
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=MAX_CHUNK_TOKENS,
-        chunk_overlap=CHUNK_OVERLAP_TOKENS,
-        separators=["\n\n", "\n", ". ", " "],
-    )
-
-    texts, metas = [], []
-    file_count = 0
-
-    for _, row in df.iterrows():
-        q = str(row.get(col_q) or "").strip()
-        a = str(row.get(col_a) or "").strip()
-        if not q or not a:
-            continue
-
-        gens = []
-        for g, cols in gen_cols.items():
-            for c in cols:
-                if _normalize_yes(row.get(c)):
-                    gens.append(g); break
-
-        title = (q[:70] + "…") if len(q) > 70 else q
-        content = f"Q: {q}\n\nA: {a}"
-
-        chunks = [c for c in splitter.split_text(content) if c.strip()]
-        texts.extend(chunks)
-        metas.extend(
-            [{
-                "source": path,
-                "title": title,
-                "source_type": source_type,
-                "category": (row.get(col_cat) or None),
-                "gens": gens,   # ex: ["gen1","gen2"]
-            }] * len(chunks)
-        )
-        file_count += 1
-
-    if not texts:
-        return {"indexed_files": 0, "indexed_chunks": 0}
-
-    vs = Chroma(
+# ---------- Vector store ----------
+def _get_vs() -> Chroma:
+    return Chroma(
         persist_directory=CHROMA_DIR,
         collection_name=COLLECTION_NAME,
         embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
     )
-    vs.add_texts(texts=texts, metadatas=metas)
-    vs.persist()
 
-    return {"indexed_files": file_count, "indexed_chunks": len(texts)}
-
-# ---------- Ingestion fichiers/dossiers ----------
-def ingest_folder(root: str, source_type: str = "mixed") -> Dict[str, int]:
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=MAX_CHUNK_TOKENS,
-        chunk_overlap=CHUNK_OVERLAP_TOKENS,
-        separators=["\n\n", "\n", ". ", " "],
-    )
-
+# ---------- Ingestion dossier (txt/pdf/docx/html) ----------
+def ingest_folder(root: str, source_type: str = "mixed"):
     texts, metas = [], []
     file_count = 0
 
@@ -165,12 +85,14 @@ def ingest_folder(root: str, source_type: str = "mixed") -> Dict[str, int]:
                     chunks = [c for c in splitter.split_text(page_text) if c.strip()]
                     texts.extend(chunks)
                     metas.extend(
-                        [{
-                            "source": path,
-                            "title": title,
-                            "source_type": source_type,
-                            "page": page_no,
-                        }] * len(chunks)
+                        [
+                            {
+                                "source": path,
+                                "title": title,
+                                "source_type": source_type,
+                                "page": page_no,
+                            }
+                        ] * len(chunks)
                     )
                 if any_page:
                     file_count += 1
@@ -191,36 +113,127 @@ def ingest_folder(root: str, source_type: str = "mixed") -> Dict[str, int]:
             chunks = [c for c in splitter.split_text(text) if c.strip()]
             texts.extend(chunks)
             metas.extend(
-                [{
-                    "source": path,
-                    "title": title,
-                    "source_type": source_type,
-                }] * len(chunks)
+                [
+                    {
+                        "source": path,
+                        "title": title,
+                        "source_type": source_type,
+                    }
+                ] * len(chunks)
             )
             file_count += 1
 
     if not texts:
         return {"indexed_files": 0, "indexed_chunks": 0}
 
-    vs = Chroma(
-        persist_directory=CHROMA_DIR,
-        collection_name=COLLECTION_NAME,
-        embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
-    )
+    vs = _get_vs()
     vs.add_texts(texts=texts, metadatas=metas)
     vs.persist()
-
     return {"indexed_files": file_count, "indexed_chunks": len(texts)}
 
-# ---------- Dispatcher : chemin unique ----------
-def ingest_path(path: str, source_type: str = "mixed") -> Dict[str, int]:
+# ---------- Ingestion Excel (FAQ) ----------
+def _boolish(v) -> bool:
+    if v is None:
+        return False
+    s = str(v).strip().lower()
+    return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
+
+def ingest_excel(path: str, source_type: str = "faq"):
+    if not os.path.exists(path):
+        return {"indexed_files": 0, "indexed_chunks": 0}
+
+    # lit la feuille par défaut
+    df = pd.read_excel(path, engine="openpyxl")
+
+    # normalise les noms de colonnes (insensible à la casse)
+    cols = {c.lower(): c for c in df.columns}
+    if "vraag" not in cols or "antwoord" not in cols:
+        # colonnes obligatoires manquantes
+        return {"indexed_files": 0, "indexed_chunks": 0}
+
+    c_vraag = cols["vraag"]
+    c_antwoord = cols["antwoord"]
+    c_cat = cols.get("categorie")
+    c_gen1 = cols.get("gen1")
+    c_gen2 = cols.get("gen2")
+    c_gen3 = cols.get("gen3")
+
+    texts, metas = [], []
+    for _, row in df.iterrows():
+        vraag = str(row.get(c_vraag, "") or "").strip()
+        antw  = str(row.get(c_antwoord, "") or "").strip()
+        if not vraag or not antw:
+            continue
+
+        # 1 chunk par ligne FAQ (souvent suffisant)
+        text = f"Vraag: {vraag}\nAntwoord: {antw}"
+
+        gens = []
+        if c_gen1 and _boolish(row.get(c_gen1)): gens.append("gen1")
+        if c_gen2 and _boolish(row.get(c_gen2)): gens.append("gen2")
+        if c_gen3 and _boolish(row.get(c_gen3)): gens.append("gen3")
+
+        title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
+        meta = {
+            "source": path,
+            "title": title,
+            "source_type": source_type,
+            "categorie": (str(row.get(c_cat)).strip() if c_cat else None),
+            "gens": gens or None,
+        }
+        texts.append(text)
+        metas.append(meta)
+
+    if not texts:
+        return {"indexed_files": 0, "indexed_chunks": 0}
+
+    vs = _get_vs()
+    vs.add_texts(texts=texts, metadatas=metas)
+    vs.persist()
+    return {"indexed_files": 1, "indexed_chunks": len(texts)}
+
+# ---------- Ingestion universelle (fichier ou dossier) ----------
+def ingest_path(path: str, source_type: str = "mixed"):
+    if not path:
+        return {"indexed_files": 0, "indexed_chunks": 0}
+
     if os.path.isdir(path):
         return ingest_folder(path, source_type)
 
     ext = path.lower().rsplit(".", 1)[-1]
-    if ext in ("xlsx", "xls"):
-        return _ingest_excel(path, source_type="faq")
+    if ext in {"xlsx", "xls"}:
+        return ingest_excel(path, source_type="faq")
 
-    # Pour 1 fichier texte/PDF/docx unique : on réutilise ingest_folder sur son dossier
-    parent = os.path.dirname(path) or "."
-    return ingest_folder(parent, source_type)
+    # Fichier texte isolé
+    texts, metas = [], []
+    title = os.path.splitext(os.path.basename(path))[0]
+    if ext == "pdf":
+        for page_text, page_no in _load_pdf_pages(path):
+            if not page_text.strip():
+                continue
+            chunks = [c for c in splitter.split_text(page_text) if c.strip()]
+            texts.extend(chunks)
+            metas.extend([{"source": path, "title": title, "source_type": source_type, "page": page_no}] * len(chunks))
+    elif ext == "docx":
+        text = _load_docx(path)
+        chunks = [c for c in splitter.split_text(text) if c.strip()]
+        texts.extend(chunks)
+        metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
+    elif ext in {"html", "htm"}:
+        text = _load_html(path)
+        chunks = [c for c in splitter.split_text(text) if c.strip()]
+        texts.extend(chunks)
+        metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
+    elif ext in {"txt", "md"}:
+        text = _load_txt(path)
+        chunks = [c for c in splitter.split_text(text) if c.strip()]
+        texts.extend(chunks)
+        metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
+
+    if not texts:
+        return {"indexed_files": 0, "indexed_chunks": 0}
+
+    vs = _get_vs()
+    vs.add_texts(texts=texts, metadatas=metas)
+    vs.persist()
+    return {"indexed_files": 1, "indexed_chunks": len(texts)}
