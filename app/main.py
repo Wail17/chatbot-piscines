@@ -12,7 +12,11 @@ from .rag import (
     detect_gen,          # détecte gen1/gen2/gen3 dans la question
     extract_found_gens,  # retourne les générations vues dans les métadatas des docs
 )
-from .ingest import ingest_path          # gère dossiers, fichiers ET Excel (.xlsx/.xls)
+from .ingest import ingest_path
+
+@app.post("/ingest")
+def ingest(req: IngestRequest):
+    return ingest_path(req.path, req.source_type)
 from .training import add_correction, search_correction, save_feedback
 from .config import CORRECTION_THRESHOLD
 
