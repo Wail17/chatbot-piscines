@@ -4,13 +4,13 @@ uvicorn[standard]
 python-dotenv
 
 # OpenAI SDK
-openai>=1.0.0,<2.0.0
+openai>=1.40,<2
 
-# Chaîne RAG
-langchain>=0.2
-langchain-community>=0.2
-langchain-openai>=0.1.7
-chromadb>=0.5
+# LangChain + Chroma
+langchain==0.2.12
+langchain-community==0.2.12
+langchain-openai==0.1.7
+chromadb==0.5.3
 
 # Parseurs de fichiers
 pypdf
