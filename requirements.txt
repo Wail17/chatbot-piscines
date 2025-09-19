@@ -1,29 +1,29 @@
 # API
-fastapi
-uvicorn[standard]
-python-dotenv
+fastapi==0.116.2
+uvicorn[standard]==0.35.0
+python-dotenv==1.0.1
 
 # OpenAI SDK
 openai>=1.40,<2
 
-# LangChain + Chroma
-langchain==0.2.12
-langchain-community==0.2.12
+# LangChain + Chroma (versions compatibles entre elles)
+langchain>=0.2.13,<0.3
+langchain-community>=0.2.13,<0.3
 langchain-openai==0.1.7
 chromadb==0.5.3
 
 # Parseurs de fichiers
-pypdf
-python-docx
-beautifulsoup4
-lxml
-markdownify
+pypdf==6.0.0
+python-docx==1.2.0
+beautifulsoup4==4.13.5
+lxml==6.0.1
+markdownify==1.2.0
 
 # Excel
-pandas
-openpyxl
+pandas==2.3.2
+openpyxl==3.1.5
 
 # Utilitaires
-tiktoken
-httpx
-tenacity
+tiktoken==0.11.0
+httpx==0.28.1
+tenacity==8.5.0
