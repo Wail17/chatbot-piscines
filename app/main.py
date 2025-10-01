@@ -96,12 +96,14 @@ def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
     if not _FAQ:
         return None
     uq = _normalize(user_q)
-    # exact/inclusion
+
+    # exact / inclusion sur question
     for row in _FAQ:
         q = _normalize(row.get("question", ""))
         if q and (uq == q or uq in q or q in uq):
             return row
-    # fuzzy
+
+    # fuzzy sur question
     best = (0.0, None)
     for row in _FAQ:
         q = _normalize(row.get("question", ""))
@@ -112,6 +114,7 @@ def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
             best = (sc, row)
     if best[0] >= min_score:
         return best[1]
+
     # inclusion/fuzzy sur réponse
     best = (0.0, None)
     for row in _FAQ:
@@ -125,6 +128,7 @@ def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
             best = (sc, row)
     return best[1] if best[0] >= (min_score - 0.08) else None
 
+# --- recherche par mots-clés utiles ---
 KW_MAP = {
     "tlf": ["tlf"],
     "thermometer": ["thermometer", "thermometers", "vloeistof thermometer", "vloeistofthermometer"],
@@ -157,6 +161,31 @@ def _faq_keyword_search(user_q: str) -> dict | None:
             best = (hits, row)
     return best[1] if best[0] >= 2 else None
 
+# ---------------------- utils extra ----------------------
+def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(extra, dict):
+        return None
+    g = str(extra.get("gen", "")).strip().lower()
+    if g in {"gen1", "gen 1"}: return "gen1"
+    if g in {"gen2", "gen 2"}: return "gen2"
+    if g in {"gen3", "gen 3"}: return "gen3"
+    return None
+
+def _parse_extra_device(extra: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(extra, dict):
+        return None
+    d = str(extra.get("device", "")).strip().lower()
+    d = d.replace("apparaat", "").strip()
+    aliases = {
+        "wifipoolapparaat": "wifipool",
+        "wifipool": "wifipool",
+        "benisol": "benisol",
+    }
+    return aliases.get(d, d or None)
+
+def _norm_branch_key(s: str) -> str:
+    return (s or "").strip().lower().replace(" ", "")
+
 # ---------------------- Routes ----------------------
 @app.get("/health")
 def health():
@@ -171,6 +200,7 @@ def dbg_lookup(q: str):
 @app.post("/ingest")
 def ingest(req: IngestRequest):
     res = ingest_path(req.path, req.source_type)
+    # recharger l'index
     global _FAQ
     try:
         with open(_FAQ_PATH, "r", encoding="utf-8") as f:
@@ -187,60 +217,76 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
-def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not isinstance(extra, dict):
-        return None
-    g = str(extra.get("gen", "")).strip().lower()
-    if g in {"gen1", "gen 1"}: return "gen1"
-    if g in {"gen2", "gen 2"}: return "gen2"
-    if g in {"gen3", "gen 3"}: return "gen3"
-    return None
-
+# ---------------------- Chat ----------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 1) corrections admin
+    # 1) Correction admin prioritaire
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 2) lookup FAQ
+    # 2) Lookup FAQ
     row = _best_faq_match(q) or _faq_keyword_search(q)
     if row:
-        ask_gen_flag = bool(row.get("ask_gen"))
-        # si l’Excel demandait GEN et qu’on a déjà la GEN => renvoyer la réponse spécifique
-        gen_from_req = _parse_extra_gen(req.extra) or detect_gen(q) if callable(detect_gen) else None
-        if ask_gen_flag and gen_from_req:
-            if gen_from_req == "gen1" and (row.get("answer_gen1")):
-                ans_text = row["answer_gen1"]
-            elif gen_from_req == "gen2" and (row.get("answer_gen2")):
-                ans_text = row["answer_gen2"]
-            else:
-                # si pas de réponse spécifique trouvée, on retombe sur la clarification
-                ans_text = None
+        # ---- Clarification / ligne jaune ?
+        ask_flag = bool(row.get("ask_gen"))  # indicateur général depuis l'Excel
+        ftype = (row.get("followup_type") or ("gen" if ask_flag else None))  # "gen" ou "device" (ou None)
 
-            if ans_text:
-                extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
-                citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
-                return {"answer": ans_text + extra_line, "citations": citations}
+        if ftype in {"gen", "device"}:
+            # 2.a — l’utilisateur a-t-il déjà choisi ?
+            chosen_key = None
+            if ftype == "gen":
+                # via bouton -> req.extra["gen"], sinon détection dans la phrase
+                chosen_key = _parse_extra_gen(req.extra)
+                try:
+                    chosen_key = chosen_key or detect_gen(q)
+                except Exception:
+                    pass
+            else:  # device
+                chosen_key = _parse_extra_device(req.extra)
 
-        # sinon : poser la clarification
-        if ask_gen_flag:
-            opts = ["gen1", "gen2"]
+            # dictionnaire des réponses par branche
+            answers: Dict[str, str] = row.get("branch_answers") or {}
+            # options & labels
+            options: List[str] = row.get("branch_options") or (["gen1", "gen2"] if ftype == "gen" else ["wifipool", "benisol"])
+            labels: Dict[str, str] = row.get("branch_labels") or {o: o.upper() for o in options}
+
+            if chosen_key:
+                key = _norm_branch_key(chosen_key)
+                alias = {
+                    "gen 1": "gen1", "gen1": "gen1",
+                    "gen 2": "gen2", "gen2": "gen2",
+                    "gen 3": "gen3", "gen3": "gen3",
+                    "wifipoolapparaat": "wifipool", "wifipool": "wifipool",
+                    "benisol": "benisol",
+                }
+                key = alias.get(key, key)
+                txt = answers.get(key, "") or answers.get(_norm_branch_key(labels.get(key, "")), "")
+                if txt:
+                    citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
+                    return {"answer": txt, "citations": citations}
+
+            # 2.b — pas de choix -> poser la question jaune avec les bons boutons
+            param = "gen" if ftype == "gen" else "device"
+            btns = [labels.get(o, o.upper()) for o in options]
             return {
-                "answer": row.get("followup_q") or "Hebt u een Gen 1 of een Gen 2 apparaat?",
-                "clarify": {"param": "gen", "options": opts, "tips": GEN_TIPS_NL},
+                "answer": row.get("followup_q") or ("Hebt u een Gen 1 of een Gen 2 apparaat?" if ftype == "gen" else "Kies een apparaat: Wifipool of Benisol."),
+                "clarify": {"param": param, "options": btns, "tips": GEN_TIPS_NL if ftype == "gen" else []},
                 "citations": [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}],
             }
 
-        # réponse directe standard
-        extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
-        citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
-        return {"answer": row.get("answer", "") + extra_line, "citations": citations}
+        # ---- Pas de clarification : réponse directe de l’index
+        base_answer = (row.get("answer") or "").strip()
+        if base_answer:
+            extra_line = ("\n\nBekijk video: " + str(row["video_url"])) if row.get("video_url") else ""
+            citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
+            return {"answer": base_answer + extra_line, "citations": citations}
+        # Sécurité : pas d’answer -> on ne renvoie pas une chaîne vide ; on passera au RAG plus bas.
 
-    # 3) si pas de ligne FAQ trouvée -> RAG
+    # 3) Pas de ligne FAQ trouvée ou answer vide -> RAG
     extra_gen = _parse_extra_gen(req.extra)
     try:
         gen = extra_gen or detect_gen(q)
