@@ -1,19 +1,22 @@
 # app/main.py
 from typing import List, Optional, Dict, Any, Set, Tuple
-import os, json, re, unicodedata
+import os, json, re, unicodedata, shutil
 from difflib import SequenceMatcher
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
-from .training import add_correction, search_correction, save_feedback
+# Faculatif / déjà existant dans ton app
+from .rag import retrieve, generate_answer, detect_gen, extract_found_gens  # type: ignore
+from .training import add_correction, search_correction, save_feedback       # type: ignore
 from .config import CORRECTION_THRESHOLD, STORE_DIR
 
+# -----------------------------------------------------------------------------
+# FastAPI + CORS
+# -----------------------------------------------------------------------------
 app = FastAPI(title="Chatbot Piscines API")
 
-# ---------------------- CORS ----------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
@@ -23,20 +26,28 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Accept", "Origin", "ngrok-skip-browser-warning"],
+    allow_headers=[
+        "Content-Type",
+        "ngrok-skip-browser-warning",
+        "Authorization",
+        "Accept",
+        "Origin",
+    ],
     expose_headers=["Content-Type"],
 )
 
-# ---------------------- Schemas ----------------------
+# -----------------------------------------------------------------------------
+# Schémas d’E/S
+# -----------------------------------------------------------------------------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
     debug: bool = False
-    extra: Optional[Dict[str, Any]] = None  # ex: {"gen":"gen1"} ou {"choice":"wifipool"}
+    extra: Optional[Dict[str, Any]] = None  # contiendra p.ex. {"pick":"Wifipool"}
 
 class IngestRequest(BaseModel):
-    path: str
-    source_type: str = "mixed"
+    path: str                  # chemin lisible par le serveur (Railway)
+    source_type: str = "faq"   # ignoré ici, pour compat descendante
 
 class CorrectionIn(BaseModel):
     question: str
@@ -51,58 +62,20 @@ class FeedbackIn(BaseModel):
     notes: Optional[str] = None
     user: Optional[str] = None
 
-GEN_TIPS_NL = [
-    "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
-    "2) Bij toestel zoeken: Gen 1 toont meestal meerdere modules; Gen 2 toont 1 module.",
-    "3) Gen 1 wordt vaak met USB 5V geleverd; Gen 2 met 220V of 12V stekker.",
-]
+# -----------------------------------------------------------------------------
+# Constantes et utilitaires
+# -----------------------------------------------------------------------------
+JSONL_TARGET = os.path.join(STORE_DIR, "faq.jsonl")
+os.makedirs(STORE_DIR, exist_ok=True)
 
-# ---------------------- FAQ (JSON/JSONL) ----------------------
-_FAQ_JSON = os.path.join(STORE_DIR, "faq_index.json")     # si tu as un JSON tableau
-_FAQ_JSONL = os.path.join(STORE_DIR, "faq_index.jsonl")   # si tu as du JSONL (1 objet par ligne)
-
-def _boolish(v: Any) -> bool:
-    if v is None: return False
-    s = str(v).strip().lower()
-    return s in {"x", "1", "true", "yes", "ja", "oui"}
-
-def _load_faq() -> List[dict]:
-    recs: List[dict] = []
-    if os.path.exists(_FAQ_JSONL):
-        with open(_FAQ_JSONL, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line: continue
-                recs.append(json.loads(line))
-    elif os.path.exists(_FAQ_JSON):
-        with open(_FAQ_JSON, "r", encoding="utf-8") as f:
-            recs = json.load(f)
-    else:
-        return []
-
-    # normalisation minimale -> structure commune
-    out: List[dict] = []
-    for r in recs:
-        out.append({
-            "category": r.get("Categorie", "") or r.get("Category", ""),
-            "question": r.get("Vraag", "") or r.get("Question", ""),
-            "answer": r.get("Antwoord", "") or r.get("Answer", ""),
-            "photo": r.get("Foto", "") or r.get("Photo", ""),
-            "video_url": r.get("Filmpje", "") or r.get("Video", "") or r.get("Video_URL", ""),
-            # tags = toutes colonnes cochées 'x'
-            "tags": [k for k, v in r.items() if k not in {"Categorie","Vraag","Antwoord","Foto","Filmpje","Video","Video_URL"} and _boolish(v)],
-        })
-    return out
-
-_FAQ: List[dict] = _load_faq()
-
-# ---------------------- Matching helpers ----------------------
+# Normalisation texte pour matching souple
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 
 def _normalize(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = s.lower().replace("\u00a0", " ")
+    s = s.lower()
+    s = s.replace("\u00a0", " ")
     s = re.sub(r"\s+", " ", s)
     s = _PUNCT_RE.sub("", s)
     return s.strip()
@@ -110,160 +83,205 @@ def _normalize(s: str) -> str:
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
-def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
+def _truthy(v: Any) -> bool:
+    if v is None: return False
+    s = str(v).strip().lower()
+    return s in {"1", "true", "yes", "ja", "oui", "x"}
+
+def _norm_label(s: str) -> str:
+    """Normalise un libellé d’option ('WiFi', 'wifipool', 'GEN 1', …)."""
+    return _normalize(s)
+
+# -----------------------------------------------------------------------------
+# Chargement JSONL en mémoire
+# -----------------------------------------------------------------------------
+_FAQ: List[dict] = []
+
+def _row_unify_keys(d: dict) -> dict:
+    """
+    Harmonise les variantes de clés possibles.
+    Supporte:
+      - 'categorie' / 'Categorie'
+      - 'vraag' / 'Vraag'
+      - 'follow_up' / 'followup'
+      - 'follow_up_question' / 'followup_question'
+      - 'options' / 'opties'
+      - 'antwoord' / 'Antwoord'
+    """
+    out = {}
+
+    # copie brutale pour conserver tout:
+    out.update(d)
+
+    # alias majeurs
+    if "categorie" not in out and "Categorie" in out:
+        out["categorie"] = out["Categorie"]
+    if "vraag" not in out and "Vraag" in out:
+        out["vraag"] = out["Vraag"]
+    if "antwoord" not in out and "Antwoord" in out:
+        out["antwoord"] = out["Antwoord"]
+
+    # follow_up
+    if "follow_up" not in out:
+        if "followup" in out:
+            out["follow_up"] = out["followup"]
+    # follow_up_question
+    if "follow_up_question" not in out:
+        if "followup_question" in out:
+            out["follow_up_question"] = out["followup_question"]
+    # options
+    if "options" not in out and "opties" in out:
+        out["options"] = out["opties"]
+
+    # booléans clean
+    if "follow_up" in out:
+        out["follow_up"] = _truthy(out["follow_up"])
+
+    return out
+
+def _load_jsonl(path: str) -> List[dict]:
+    rows: List[dict] = []
+    if not os.path.exists(path):
+        return rows
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                d = json.loads(s)
+                rows.append(_row_unify_keys(d))
+            except Exception:
+                # on ignore la ligne invalide
+                pass
+    return rows
+
+# Charger au boot si un fichier existe déjà
+if os.path.exists(JSONL_TARGET):
+    _FAQ = _load_jsonl(JSONL_TARGET)
+
+# -----------------------------------------------------------------------------
+# Recherche dans le JSONL
+# -----------------------------------------------------------------------------
+def _best_faq_match(user_q: str, min_score: float = 0.80) -> Optional[dict]:
     if not _FAQ:
         return None
     uq = _normalize(user_q)
 
-    # exact/inclusion sur question
+    # exact / inclusion sur la question
     for row in _FAQ:
-        q = _normalize(row.get("question", ""))
+        q = _normalize(str(row.get("vraag", "")))
         if q and (uq == q or uq in q or q in uq):
             return row
 
-    # fuzzy question
+    # fuzzy sur la question
     best = (0.0, None)
     for row in _FAQ:
-        q = _normalize(row.get("question", ""))
-        if not q: continue
+        q = _normalize(str(row.get("vraag", "")))
+        if not q:
+            continue
         sc = _ratio(uq, q)
-        if sc > best[0]: best = (sc, row)
+        if sc > best[0]:
+            best = (sc, row)
     if best[0] >= min_score:
         return best[1]
 
-    # inclusion/fuzzy sur answer
+    # fallback: inclusion/fuzzy sur une éventuelle réponse 'antwoord'
     best = (0.0, None)
     for row in _FAQ:
-        a = _normalize(row.get("answer", ""))
-        if not a: continue
+        a = _normalize(str(row.get("antwoord", "")))
+        if not a:
+            continue
         if uq and (uq in a or a in uq):
             return row
         sc = _ratio(uq, a)
-        if sc > best[0]: best = (sc, row)
+        if sc > best[0]:
+            best = (sc, row)
     return best[1] if best[0] >= (min_score - 0.08) else None
 
-# ---------------------- Découpage des sous-sections ----------------------
-# On supporte deux familles de sections dans 'Antwoord':
-#  - GEN: "Gen 1 : ...", "Gen 2 : ...", "Gen 3 : ..."
-#  - TYPE: "Wifipool : ...", "Benisol : ...", "Display : ..."
-_SECTION_PATTERNS = {
-    "gen": [
-        ("gen1", r"^\s*gen\s*1\s*:\s*", "Gen 1"),
-        ("gen2", r"^\s*gen\s*2\s*:\s*", "Gen 2"),
-        ("gen3", r"^\s*gen\s*3\s*:\s*", "Gen 3"),
-    ],
-    "type": [
-        ("wifipool", r"^\s*wifipool\s*:\s*", "Wifipool"),
-        ("benisol", r"^\s*benisol\s*:\s*", "Benisol"),
-        ("display", r"^\s*display\s*:\s*", "Display"),
-    ],
-}
-
-def _split_sections(text: str, family: str) -> Dict[str, str]:
+def _row_options(row: dict) -> Dict[str, dict]:
     """
-    Découpe 'text' selon la famille ('gen' ou 'type') en utilisant les en-têtes "X :".
-    Retour: dict { key -> bloc_texte }
+    Retourne un dict {label_original -> data_option}, et un
+    dict normalisé {label_norm -> label_original} pour matching.
     """
-    if not text or family not in _SECTION_PATTERNS:
+    opts = row.get("options") or {}
+    if not isinstance(opts, dict):
         return {}
-    pats = _SECTION_PATTERNS[family]
+    return opts
 
-    # Construire un regex qui capture les en-têtes et le contenu jusqu'au prochain en-tête
-    # Exemple: ^(Gen 1\s*:)(.*?)(?=^Gen 2\s*:|^Gen 3\s*:|$)
-    headers = [p[1] for p in pats]
-    header_union = "|".join(f"({h})" for h in headers)
-    # repère toutes les occurrences d'en-têtes
-    header_re = re.compile(header_union, re.IGNORECASE | re.MULTILINE)
+def _pick_option(row: dict, user_choice: str) -> Optional[Tuple[str, str]]:
+    """
+    Match le choix utilisateur contre les labels d’options.
+    Retourne (answer, label_matched) ou None.
+    """
+    opts = _row_options(row)
+    if not opts:
+        return None
 
-    # trouver positions des en-têtes
-    matches = list(header_re.finditer(text))
-    if not matches:
-        return {}
+    # index normalisé
+    norm_to_label = { _norm_label(lbl): lbl for lbl in opts.keys() }
+    uc_norm = _norm_label(user_choice)
 
-    sections: Dict[str, str] = {}
-    for idx, m in enumerate(matches):
-        start = m.start()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-        block = text[start:end].strip()
+    # match direct normalisé
+    if uc_norm in norm_to_label:
+        real = norm_to_label[uc_norm]
+        data = opts.get(real, {})
+        ans = str(data.get("antwoord", "")).strip()
+        tip = str(data.get("aanbeveling", "")).strip()
+        full = ans if not tip else (ans + "\n\n" + tip)
+        return (full, real)
 
-        # identifier quel header correspond
-        hdr = m.group(0)
-        key = None
-        label = None
-        for k, pat, lbl in pats:
-            if re.match(pat, hdr, flags=re.IGNORECASE | re.MULTILINE):
-                key, label = k, lbl
-                break
-        if not key:
-            continue
-
-        # enlever l'en-tête "X :" au début du bloc
-        block = re.sub(r"^\s*[^:]+:\s*", "", block, flags=re.IGNORECASE | re.MULTILINE).strip()
-        if block:
-            sections[key] = block
-    return sections
-
-def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not isinstance(extra, dict): return None
-    g = str(extra.get("gen", "")).strip().lower()
-    if g in {"gen1", "gen 1"}: return "gen1"
-    if g in {"gen2", "gen 2"}: return "gen2"
-    if g in {"gen3", "gen 3"}: return "gen3"
-    return None
-
-def _parse_extra_choice(extra: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not isinstance(extra, dict): return None
-    for k in ("choice", "optie", "option", "selectie"):
-        v = extra.get(k)
-        if v: return str(v)
-    return None
-
-def _best_label_match(value: str, labels: List[str]) -> Optional[str]:
-    nv = _normalize(value)
+    # fuzzy léger si pas trouvé
     best = (0.0, None)
-    for lab in labels:
-        nl = _normalize(lab)
-        if nv == nl or nv in nl or nl in nv:
-            return lab
-        sc = _ratio(nv, nl)
-        if sc > best[0]: best = (sc, lab)
-    return best[1] if best[0] >= 0.78 else None
+    for nlabel, real in norm_to_label.items():
+        sc = _ratio(uc_norm, nlabel)
+        if sc > best[0]:
+            best = (sc, real)
+    if best[0] >= 0.75:
+        data = opts.get(best[1], {})
+        ans = str(data.get("antwoord", "")).strip()
+        tip = str(data.get("aanbeveling", "")).strip()
+        full = ans if not tip else (ans + "\n\n" + tip)
+        return (full, best[1])
 
-# ---------------------- Routes ----------------------
+    return None
+
+# -----------------------------------------------------------------------------
+# Routes
+# -----------------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "faq_rows": len(_FAQ)}
 
+@app.get("/debug/faq_lookup")
+def dbg_lookup(q: str):
+    row = _best_faq_match(q)
+    if not row:
+        return {"q": q, "matched": False}
+    return {
+        "q": q,
+        "matched": True,
+        "vraag": row.get("vraag"),
+        "follow_up": row.get("follow_up", False),
+        "follow_up_question": row.get("follow_up_question"),
+        "options": list((_row_options(row) or {}).keys()),
+    }
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):
     """
-    Charge le JSON/JSONL fourni, le copie dans STORE_DIR sous le nom standard,
-    puis recharge l'index en mémoire (_FAQ).
+    Charge un fichier JSONL (1 JSON par ligne) depuis `req.path` et le copie
+    vers STORE_DIR/faq.jsonl puis recharge en mémoire.
     """
-    path = (req.path or "").strip()
-    if not path or not os.path.exists(path):
-        raise HTTPException(status_code=400, detail=f"file not found: {path}")
+    src = req.path
+    if not os.path.exists(src):
+        return {"reloaded": False, "error": "file not found", "faq_rows": len(_FAQ)}
+    # copie atomique-ish
+    shutil.copyfile(src, JSONL_TARGET)
 
-    os.makedirs(STORE_DIR, exist_ok=True)
-
-    ext = os.path.splitext(path)[1].lower()
-    if ext not in {".jsonl", ".json"}:
-        raise HTTPException(status_code=400, detail="expected .jsonl or .json")
-
-    target = os.path.join(
-        STORE_DIR,
-        "faq_index.jsonl" if ext == ".jsonl" else "faq_index.json"
-    )
-
-    # copie dans le STORE_DIR
-    shutil.copyfile(path, target)
-
-    # recharge en mémoire
     global _FAQ
-    _FAQ[:] = _load_faq()
-
-    return {"reloaded": True, "faq_rows": len(_FAQ), "target": target}
+    _FAQ = _load_jsonl(JSONL_TARGET)
+    return {"reloaded": True, "faq_rows": len(_FAQ)}
 
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
@@ -273,76 +291,69 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
+# Paramètre générique pour la clarification côté UI
+FOLLOWUP_PARAM = "pick"
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 1) Corrections admin
+    # 1) corrections admin prioritaire
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 2) Lookup FAQ
+    # 2) JSONL direct
     row = _best_faq_match(q)
     if row:
-        question = row.get("question") or "FAQ"
-        answer = row.get("answer") or ""
-        citations = [{"title": question, "source": row.get("category") or "FAQ", "page": None}]
+        # a) cas avec follow_up -> poser la question si on n’a pas encore le choix
+        follow = bool(row.get("follow_up", False))
+        if follow:
+            # si le choix a déjà été donné (ex. clic bouton)
+            choice = None
+            if isinstance(req.extra, dict):
+                choice = req.extra.get(FOLLOWUP_PARAM)
 
-        # a) Sections GEN ?
-        gen_sections = _split_sections(answer, "gen")
-        if len(gen_sections) >= 2:
-            chosen = _parse_extra_gen(req.extra)
-            if chosen and chosen in gen_sections:
-                return {"answer": gen_sections[chosen], "citations": citations}
-            # pas de choix -> demander GEN
-            return {
-                "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
-                "clarify": {"param": "gen", "options": [ "gen1", "gen2" ] + (["gen3"] if "gen3" in gen_sections else []), "tips": GEN_TIPS_NL},
-                "citations": citations,
-            }
-
-        # b) Sections TYPE (Wifipool / Benisol / Display) ?
-        type_sections = _split_sections(answer, "type")
-        if len(type_sections) >= 2:
-            labels_pretty = {
-                "wifipool": "Wifipool",
-                "benisol": "Benisol",
-                "display": "Display",
-            }
-            # Si l'utilisateur a déjà choisi une option (extra.choice)
-            choice = _parse_extra_choice(req.extra)
             if choice:
-                label = _best_label_match(choice, [labels_pretty[k] for k in type_sections.keys()])
-                if label:
-                    # remap pretty -> key
-                    key = [k for k,v in labels_pretty.items() if v == label][0]
-                    return {"answer": type_sections[key], "citations": citations}
+                picked = _pick_option(row, str(choice))
+                if picked:
+                    answer_text, matched_label = picked
+                    citations = [{
+                        "title": row.get("vraag") or "FAQ",
+                        "source": JSONL_TARGET,
+                        "page": None
+                    }]
+                    return {"answer": answer_text, "citations": citations}
 
-            # Demander le choix
-            present_pretty = [labels_pretty[k] for k in type_sections.keys()]
+                # si le choix n'a pas matché, on repose la question
+            # poser la clarification
+            opts = list((_row_options(row) or {}).keys())
             return {
-                "answer": "Welk type apparaat heb je?",
-                "clarify": {"param": "choice", "options": present_pretty},
-                "citations": citations,
+                "answer": row.get("follow_up_question") or "Kunt u een keuze maken?",
+                "clarify": {"param": FOLLOWUP_PARAM, "options": opts},
+                "citations": [{"title": row.get("vraag") or "FAQ", "source": JSONL_TARGET, "page": None}],
             }
 
-        # c) Sinon : réponse directe
-        if answer.strip():
-            # ajoute vidéo si dispo
-            if row.get("video_url"):
-                answer += "\n\nBekijk video: " + str(row["video_url"])
-            return {"answer": answer, "citations": citations}
+        # b) sinon : réponse directe 'antwoord'
+        direct = str(row.get("antwoord", "")).strip()
+        if direct:
+            citations = [{"title": row.get("vraag") or "FAQ", "source": JSONL_TARGET, "page": None}]
+            return {"answer": direct, "citations": citations}
 
-        # garde-fou si pas de contenu exploitable
-        return {"answer": "Er is geen specifiek antwoord gevonden voor deze vraag.", "citations": citations}
+    # 3) Fallback RAG (si dispo)
+    #    Détection éventuelle de gen (compatibilité avec ton ancien front)
+    extra_gen = None
+    if isinstance(req.extra, dict):
+        g = str(req.extra.get("gen", "")).strip().lower()
+        if g in {"gen1", "gen 1"}: extra_gen = "gen1"
+        elif g in {"gen2", "gen 2"}: extra_gen = "gen2"
+        elif g in {"gen3", "gen 3"}: extra_gen = "gen3"
 
-    # 3) Fallback RAG
     try:
-        gen = _parse_extra_gen(req.extra) or (detect_gen(q) if callable(detect_gen) else None)
+        gen = extra_gen or detect_gen(q)
     except Exception:
-        gen = _parse_extra_gen(req.extra)
+        gen = extra_gen
 
     try:
         docs = retrieve(q, gen_filter=gen)
@@ -355,10 +366,10 @@ def chat(req: ChatRequest):
         found = set()
 
     if not gen and found:
-        options = sorted(list(found & {"gen1","gen2","gen3"})) or ["gen1","gen2"]
+        options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
         return {
             "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
-            "clarify": {"param": "gen", "options": options, "tips": GEN_TIPS_NL},
+            "clarify": {"param": "gen", "options": options},
             "citations": [],
         }
 
