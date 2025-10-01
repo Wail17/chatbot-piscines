@@ -1,8 +1,6 @@
 # app/main.py
-from typing import List, Optional, Dict, Any, Set, Tuple
-import json
-import os
-import re
+from typing import List, Optional, Dict, Any, Set
+import os, json, re, unicodedata
 from difflib import SequenceMatcher
 
 from fastapi import FastAPI
@@ -12,27 +10,23 @@ from pydantic import BaseModel
 from .rag import (
     retrieve,
     generate_answer,
-    detect_gen,          # -> "gen1" / "gen2" / "gen3" ou None
-    extract_found_gens,  # -> set({"gen1","gen2"}) trouvé dans les metadata
+    detect_gen,
+    extract_found_gens,
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
 from .config import CORRECTION_THRESHOLD, STORE_DIR
 
-# ------------------------------------------------------------------------------------
-# App
-# ------------------------------------------------------------------------------------
 app = FastAPI(title="Chatbot Piscines API")
 
-# ------------------------------------------------------------------------------------
-# CORS  (mets ici tes domaines de prod et de la page WP où s’intègre le widget)
-# ------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
-    # "https://web-production-XXXX.up.railway.app",  # si tu appelles direct l’API
+    # "https://web-production-XXXX.up.railway.app",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -48,71 +42,14 @@ app.add_middleware(
     expose_headers=["Content-Type"],
 )
 
-# ------------------------------------------------------------------------------------
-# Chargement de l’index FAQ (écrit par /ingest)
-# ------------------------------------------------------------------------------------
-FAQ_INDEX_PATH = os.path.join(STORE_DIR, "faq_index.json")
-_FAQ: List[Dict[str, Any]] = []
-
-def _normalize(s: str) -> str:
-    # lower + remove accents
-    s = unicodedata.normalize("NFKD", s or "")
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = s.lower()
-
-    # normalize spaces (NBSP -> space, collapse)
-    s = s.replace("\u00a0", " ")
-    s = re.sub(r"\s+", " ", s)
-
-    # remove punctuation and any spaces around it (handles "module ?" vs "module?")
-    s = re.sub(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*", "", s)
-
-    return s.strip()
-
-def _load_faq_index():
-    global _FAQ
-    try:
-        with open(FAQ_INDEX_PATH, "r", encoding="utf-8") as f:
-            _FAQ = json.load(f)
-    except Exception:
-        _FAQ = []
-
-_load_faq_index()
-
-def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
-    """
-    Exact/inclusion match after normalization, else fuzzy (difflib) with a slightly
-    lower threshold to survive tiny typos/spaces differences from Excel.
-    """
-    if not _FAQ:
-        return None
-    uq = _normalize(user_q)
-    best: tuple[float, dict | None] = (0.0, None)
-
-    for row in _FAQ:
-        q = _normalize(row.get("question", ""))
-        if not q:
-            continue
-
-        # exact or inclusion -> immediate hit
-        if uq == q or uq in q or q in uq:
-            return row
-
-        # fuzzy
-        score = SequenceMatcher(None, uq, q).ratio()
-        if score > best[0]:
-            best = (score, row)
-
-    return best[1] if best[0] >= min_score else None
-
-# ------------------------------------------------------------------------------------
-# Modèles
-# ------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
     debug: bool = False
-    extra: Optional[Dict[str, Any]] = None  # ex: {"gen":"gen1"}
+    extra: Optional[Dict[str, Any]] = None
 
 class IngestRequest(BaseModel):
     path: str
@@ -131,30 +68,152 @@ class FeedbackIn(BaseModel):
     notes: Optional[str] = None
     user: Optional[str] = None
 
-# Conseils NL pour reconnaître Gen1/Gen2 (affichable côté front si besoin)
 GEN_TIPS_NL = [
     "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
     "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, en bij een Gen 2 toestel maar 1 module.",
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
-# ------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Load FAQ index (écrit par /ingest)
+# ---------------------------------------------------------------------
+_FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
+try:
+    with open(_FAQ_PATH, "r", encoding="utf-8") as f:
+        _FAQ: List[dict] = json.load(f)
+except Exception:
+    _FAQ = []
+
+# ---------------- Lookup helpers (robustes) ----------------
+_PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
+
+def _normalize(s: str) -> str:
+    # lower + retire accents
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower()
+
+    # NBSP -> espace + compresser
+    s = s.replace("\u00a0", " ")
+    s = re.sub(r"\s+", " ", s)
+
+    # retirer ponctuation (et espaces autour) pour tolérer "module ?" vs "module?"
+    s = _PUNCT_RE.sub("", s)
+    return s.strip()
+
+def _ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
+    """1) match exact/inclusion sur question normalisée
+       2) fuzzy sur question
+       3) inclusion/fuzzy sur réponse si besoin (utile si l'info est surtout dans 'answer')."""
+    if not _FAQ:
+        return None
+    uq = _normalize(user_q)
+
+    # 1) exact / inclusion sur question
+    for row in _FAQ:
+        q = _normalize(row.get("question", ""))
+        if not q:
+            continue
+        if uq == q or uq in q or q in uq:
+            return row
+
+    # 2) fuzzy sur question
+    best = (0.0, None)
+    for row in _FAQ:
+        q = _normalize(row.get("question", ""))
+        if not q:
+            continue
+        sc = _ratio(uq, q)
+        if sc > best[0]:
+            best = (sc, row)
+    if best[0] >= min_score:
+        return best[1]
+
+    # 3) Inclusion/fuzzy sur réponse
+    best = (0.0, None)
+    for row in _FAQ:
+        a = _normalize(row.get("answer", ""))
+        if not a:
+            continue
+        if uq and (uq in a or a in uq):
+            return row
+        sc = _ratio(uq, a)
+        if sc > best[0]:
+            best = (sc, row)
+    return best[1] if best[0] >= (min_score - 0.08) else None  # un poil plus tolérant
+
+# --- recherche par mots-clés (synonymes utiles) ------------
+KW_MAP = {
+    # clés -> listes de variantes
+    "tlf": ["tlf"],
+    "thermometer": ["thermometer", "thermometers", "vloeistof thermometer", "vloeistofthermometer"],
+    "temperatuur": ["temperatuur", "temperatuursmeting", "temperatuurmeting", "temperatuursmetingen", "sensors", "sensor"],
+    "aansluiten": ["aansluiten", "aangesloten", "ondersteunen", "kan", "heeft"],
+    "twee": ["twee", "2", "tweede"],
+}
+
+def _expand_keywords(user_q: str) -> List[str]:
+    uq = _normalize(user_q)
+    toks = set(uq.split())
+    out: set[str] = set()
+    for base, variants in KW_MAP.items():
+        if base in toks or any(v in uq for v in variants):
+            out.update(variants + [base])
+    # cas TLF + thermo → ajoute 'temperatuur' car Excel parle de temperatuurmetingen
+    if ("tlf" in out) and ({"thermometer"} & set(KW_MAP.keys())):
+        out.update(KW_MAP["temperatuur"])
+    return list(out)
+
+def _faq_keyword_search(user_q: str) -> dict | None:
+    """Scanne question+réponse normalisées et score par nb de mots-clés trouvés."""
+    if not _FAQ:
+        return None
+    kws = _expand_keywords(user_q)
+    if not kws:
+        return None
+
+    best = (0, None)
+    for row in _FAQ:
+        blob = _normalize((row.get("question") or "") + " " + (row.get("answer") or ""))
+        hits = sum(1 for k in kws if k in blob)
+        if hits > best[0]:
+            best = (hits, row)
+
+    # exiger min 2 hits pour éviter faux positifs
+    return best[1] if best[0] >= 2 else None
+
+# ---------------------------------------------------------------------
 # Routes
-# ------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "faq_rows": len(_FAQ)}
 
+@app.get("/debug/faq_lookup")
+def dbg_lookup(q: str):
+    r1 = _best_faq_match(q)
+    r2 = None if r1 else _faq_keyword_search(q)
+    return {
+        "q": q,
+        "best_match": bool(r1 or r2),
+        "via": "best" if r1 else ("keywords" if r2 else None),
+        "row": (r1 or r2),
+    }
+
 @app.post("/ingest")
 def ingest(req: IngestRequest):
-    """
-    Supporte dossiers, fichiers texte ET Excel (.xlsx/.xls).
-    Après ingestion, recharge l’index FAQ en mémoire.
-    """
-    out = ingest_path(req.path, req.source_type)
-    _load_faq_index()
-    out["faq_rows"] = len(_FAQ)
-    return out
+    res = ingest_path(req.path, req.source_type)
+    # recharger l'index si régénéré
+    global _FAQ
+    try:
+        with open(_FAQ_PATH, "r", encoding="utf-8") as f:
+            _FAQ = json.load(f)
+    except Exception:
+        pass
+    return res
 
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
@@ -164,91 +223,53 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
-# ---- (optionnel) debug pour tester le lookup direct
-@app.get("/debug/faq_lookup")
-def debug_faq_lookup(q: str):
-    row = _best_faq_match(q)
-    return {"query": q, "found": bool(row), "row": row}
-
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 0) Correction admin prioritaire
+    # 1) Correction admin prioritaire
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 1) Lookup direct dans l’Excel (faq_index.json)
-    direct_row = _best_faq_match(q)
-    if direct_row:
-        # Si la ligne exige une clarification GEN ET que l’utilisateur n’a pas encore choisi
-        extra_gen = (req.extra or {}).get("gen") if isinstance(req.extra, dict) else None
-        if direct_row.get("ask_gen") and not extra_gen:
-            options = direct_row.get("gens") or ["gen1", "gen2"]
-            # formater en minuscules propres (["gen1","gen2",...])
-            opts = [str(x).lower() for x in options if str(x).strip()]
-            prompt = direct_row.get("followup_q") or "Hebt u een Gen 1 of een Gen 2 apparaat?"
-
+    # 2) Lookup FAQ ultra-robuste (question puis mots-clés)
+    row = _best_faq_match(q) or _faq_keyword_search(q)
+    if row:
+        # clarification GEN seulement si la ligne le demande
+        ask_gen_flag = bool(row.get("ask_gen"))
+        if ask_gen_flag:
+            opts = ["gen1", "gen2"]
             return {
-                "answer": prompt,
-                "clarify": {
-                    "param": "gen",
-                    "options": opts,
-                    "tips": GEN_TIPS_NL,
-                },
-                "citations": [{
-                    "title": direct_row.get("question") or "FAQ",
-                    "url": None,
-                    "source": direct_row.get("source"),
-                    "page": None,
-                }],
-                "used_chunks": None if not req.debug else [{
-                    "text": f"FAQ direct hit: {direct_row.get('question')}",
-                    "meta": {"source": direct_row.get("source"), "sheet": direct_row.get("sheet")}
-                }]
+                "answer": row.get("followup_q") or "Hebt u een Gen 1 of een Gen 2 apparaat?",
+                "clarify": {"param": "gen", "options": opts, "tips": GEN_TIPS_NL},
+                "citations": [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}],
             }
 
-        # Sinon, renvoyer la réponse de la ligne Excel directement
-        answer = direct_row.get("answer") or direct_row.get("Antwoord") or "(geen antwoord)"
-        return {
-            "answer": answer,
-            "citations": [{
-                "title": direct_row.get("question") or "FAQ",
-                "url": None,
-                "source": direct_row.get("source"),
-                "page": None,
-            }],
-            "used_chunks": None if not req.debug else [{
-                "text": f"FAQ direct hit: {direct_row.get('question')}",
-                "meta": {"source": direct_row.get("source"), "sheet": direct_row.get("sheet")}
-            }]
-        }
+        # réponse directe de l’index
+        extra_line = ""
+        if row.get("video_url"):
+            extra_line = "\n\nBekijk video: " + str(row["video_url"])
+        citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
+        return {"answer": row.get("answer", "") + extra_line, "citations": citations}
 
-    # 2) Sinon, on passe au RAG
-    #    Déterminer la génération si fournie ou détectée dans la question
+    # 3) Déterminer génération éventuelle
     extra_gen = None
     if isinstance(req.extra, dict):
         g = str(req.extra.get("gen", "")).strip().lower()
-        if g in {"gen1", "gen 1"}:
-            extra_gen = "gen1"
-        elif g in {"gen2", "gen 2"}:
-            extra_gen = "gen2"
-        elif g in {"gen3", "gen 3"}:
-            extra_gen = "gen3"
+        extra_gen = "gen1" if g in {"gen1", "gen 1"} else "gen2" if g in {"gen2", "gen 2"} else "gen3" if g in {"gen3", "gen 3"} else None
     try:
-        gen = extra_gen or detect_gen(q)   # peut renvoyer None
+        gen = extra_gen or detect_gen(q)
     except NameError:
         gen = extra_gen
 
-    # Récupération vectorielle (avec éventuel filtre gen)
+    # 4) Récupération RAG (filtrée si gen détectée)
     try:
         docs = retrieve(q, gen_filter=gen)
     except TypeError:
         docs = retrieve(q)
 
-    # Si l’Excel marque des générations et que l’utilisateur n’a pas précisé -> demander GEN
+    # 5) Si l’Excel marque des générations et que l’utilisateur n’a pas précisé -> demander GEN
     try:
         found: Set[str] = extract_found_gens(docs)
     except NameError:
@@ -258,27 +279,15 @@ def chat(req: ChatRequest):
         options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
         return {
             "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
-            "clarify": {
-                "param": "gen",
-                "options": options,
-                "tips": GEN_TIPS_NL,
-            },
+            "clarify": {"param": "gen", "options": options, "tips": GEN_TIPS_NL},
             "citations": [],
-            "used_chunks": [] if req.debug else None,
         }
 
-    # 3) Générer la réponse RAG
+    # 6) Réponse RAG standard (ou fallback si rien)
     if not docs:
-        # message gentil si aucun context
         return {
-            "answer": (
-                "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. "
-                "Kun je meer details geven over wat je precies wilt weten?"
-            ),
+            "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
             "citations": [],
-            "used_chunks": [] if req.debug else None,
         }
-
     answer, citations = generate_answer(q, docs)
-    used = [{"text": d.page_content, "meta": d.metadata} for d in docs] if req.debug else None
-    return {"answer": answer, "citations": citations, "used_chunks": used}
+    return {"answer": answer, "citations": citations}
