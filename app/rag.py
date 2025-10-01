@@ -46,29 +46,43 @@ def detect_gen(text: str) -> Optional[str]:
     return None
 
 def extract_found_gens(docs) -> Set[str]:
-    """Collecte les générations présentes dans les métadonnées de chunks."""
+    """
+    Collecte les générations présentes dans les métadonnées des chunks.
+    Compatible avec :
+      - liste: ["gen1", "gen2"]
+      - CSV string: "gen1,gen2"
+      - champ 'gen': "gen1"
+      - nom de fichier: ".../gen1/..."
+    """
     found: Set[str] = set()
     for d in docs or []:
         md = d.metadata or {}
-        # Excel : 'gens' peut être ['gen1','gen2'] ou 'gen1'
         gens = md.get("gens")
+
+        # liste => ajoute les valeurs valides
         if isinstance(gens, list):
             for g in gens:
                 if isinstance(g, str) and g.lower() in {"gen1", "gen2", "gen3"}:
                     found.add(g.lower())
+
+        # chaîne => peut être "gen1" ou "gen1,gen2"
         elif isinstance(gens, str):
-            g = gens.lower()
-            if g in {"gen1", "gen2", "gen3"}:
-                found.add(g)
-        # Certains loaders pourraient stocker 'gen'
+            for g in re.split(r"[,\s]+", gens):
+                g = g.strip().lower()
+                if g in {"gen1", "gen2", "gen3"}:
+                    found.add(g)
+
+        # certains loaders stockent 'gen'
         g1 = md.get("gen")
         if isinstance(g1, str) and g1.lower() in {"gen1", "gen2", "gen3"}:
             found.add(g1.lower())
-        # Sauvegarde de secours via nom de fichier
+
+        # ultime secours : nom de fichier
         src = (md.get("source") or "")
         for g in ("gen1", "gen2", "gen3"):
             if g in src.lower():
                 found.add(g)
+
     return found
 
 
@@ -121,8 +135,8 @@ def _expand_neighbors(vs: Chroma, doc, k: int = 3):
 # ---------- Retrieval ----------
 def retrieve(question: str, gen_filter: Optional[str] = None):
     """
-    - Préférence FAQ/mixed, MMR, fallback similarity
-    - Filtre éventuel sur la génération via metadata['gens'] (list ou str).
+    - MMR + fallback similarity
+    - Pas de filtre Chroma sur 'gens' (string CSV) ; on filtre en mémoire si demandé.
     """
     vs = _get_vs()
     results, seen = [], set()
@@ -146,27 +160,55 @@ def retrieve(question: str, gen_filter: Optional[str] = None):
                 return True
         return False
 
-    # Construire filtre de génération
-    gen_clause = {}
-    if gen_filter:
-        # Chroma where clause pour liste/str ; $contains marche pour les listes
-        gen_clause = {"gens": {"$contains": gen_filter}}
-
-    # 1) Prefer FAQ + mixed
+    # 1) On cible les sources "faq" & "mixed" (pas de filtre sur 'gens' côté Chroma)
     for q in queries:
         flt = {"source_type": {"$in": ["faq", "mixed"]}}
-        if gen_clause:
-            flt.update(gen_clause)
         docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8), flt=flt)
         if add_with_neighbors(docs):
-            return results
+            break
 
-    # 2) Global fallback
-    for q in queries:
-        flt = gen_clause if gen_clause else None
-        docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8), flt=flt)
-        if add_with_neighbors(docs):
-            return results
+    # 2) Fallback global si pas assez d’éléments
+    if len(results) < TOP_K:
+        for q in queries:
+            docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8), flt=None)
+            if add_with_neighbors(docs):
+                break
+
+    # 3) Filtre en mémoire par génération si demandé
+    if gen_filter:
+        want = gen_filter.strip().lower()
+
+        def md_has_gen(md) -> bool:
+            if not md:
+                return False
+
+            # CSV string ou simple string
+            gens = md.get("gens")
+            if isinstance(gens, str):
+                for g in re.split(r"[,\s]+", gens):
+                    if g.strip().lower() == want:
+                        return True
+
+            # liste éventuelle
+            if isinstance(gens, list):
+                if any(isinstance(x, str) and x.strip().lower() == want for x in gens):
+                    return True
+
+            # champ 'gen'
+            g1 = md.get("gen")
+            if isinstance(g1, str) and g1.strip().lower() == want:
+                return True
+
+            # secours: nom de fichier
+            src = (md.get("source") or "").lower()
+            if want in src:
+                return True
+
+            return False
+
+        filtered = [d for d in results if md_has_gen(d.metadata)]
+        if filtered:
+            results = filtered
 
     return results
 
