@@ -1,6 +1,6 @@
 # app/main.py
-from typing import List, Optional, Dict, Any, Set
-import os, json, re, unicodedata, shutil, hashlib
+from typing import List, Optional, Dict, Any, Set, Tuple
+import os, json, re, unicodedata, hashlib
 from difflib import SequenceMatcher
 
 from fastapi import FastAPI
@@ -13,12 +13,15 @@ from .rag import (
     detect_gen,
     extract_found_gens,
 )
+from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
 from .config import CORRECTION_THRESHOLD, STORE_DIR
 
 app = FastAPI(title="Chatbot Piscines API")
 
-# ---------------------- CORS ----------------------
+# ---------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
@@ -38,7 +41,9 @@ app.add_middleware(
     expose_headers=["Content-Type"],
 )
 
-# ---------------------- Models ----------------------
+# ---------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
@@ -68,136 +73,307 @@ GEN_TIPS_NL = [
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
-# ---------------------- JSONL index ----------------------
-JSONL_TARGET = os.path.join(STORE_DIR, "faq_index.jsonl")
+# ---------------------------------------------------------------------
+# Load FAQ index (écrit par /ingest)
+# ---------------------------------------------------------------------
+_FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
+try:
+    with open(_FAQ_PATH, "r", encoding="utf-8") as f:
+        _FAQ: List[dict] = json.load(f)
+except Exception:
+    _FAQ = []
 
+# ---------------------------------------------------------------------
+# Helpers (normalisation / fuzzy / ids / composition)
+# ---------------------------------------------------------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 
 def _normalize(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     s = s.lower().replace("\u00a0", " ")
-    s = _PUNCT_RE.sub(" ", s)
     s = re.sub(r"\s+", " ", s)
+    s = _PUNCT_RE.sub("", s)
     return s.strip()
 
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
-def _row_id_from_parts(category: str, question: str) -> str:
-    base = _normalize((category or "") + "||" + (question or ""))
-    return hashlib.md5(base.encode("utf-8")).hexdigest()
-
-def _add_row_ids(items: List[dict]) -> List[dict]:
-    out = []
-    for d in items:
-        if "_row_id" not in d:
-            cat = d.get("categorie") or d.get("category") or ""
-            q = d.get("vraag") or d.get("Vraag") or d.get("question") or d.get("Question") or ""
-            d["_row_id"] = _row_id_from_parts(str(cat), str(q))
-        out.append(d)
-    return out
-
-def _load_jsonl(path: str) -> List[dict]:
-    data: List[dict] = []
-    if not os.path.exists(path):
-        return data
-    with open(path, "r", encoding="utf-8") as f:
-        for ln in f:
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                data.append(json.loads(ln))
-            except Exception:
-                continue
-    return _add_row_ids(data)
-
-def _row_get(d: dict, *keys: str, default=None):
+def _row_get(d: dict, *keys, default=None):
     for k in keys:
-        if k in d:
+        if k in d and isinstance(d[k], str) and d[k].strip():
             return d[k]
     return default
 
-def _get_options_map(row: dict) -> Dict[str, dict]:
-    return _row_get(row, "opties", "options", default={}) or {}
+def _make_row_ref(row: dict) -> str:
+    # ID stable si présent, sinon hash (question+source)
+    if "id" in row and row["id"]:
+        return str(row["id"])
+    base = (row.get("question","") or "") + "|" + (row.get("source","") or "")
+    return hashlib.md5(base.encode("utf-8")).hexdigest()
 
-OPTION_SYNONYMS = {
-    "gen1": {"gen1", "gen 1", "g1", "type 1", "gen1 apparaat", "gen 1 apparaat", "ik heb gen 1", "ik heb een gen 1"},
-    "gen2": {"gen2", "gen 2", "g2", "type 2", "gen2 apparaat", "gen 2 apparaat", "ik heb gen 2", "ik heb een gen 2"},
-    "gen3": {"gen3", "gen 3", "g3", "type 3", "gen3 apparaat", "gen 3 apparaat", "ik heb gen 3", "ik heb een gen 3"},
-    "wifipool": {"wifipool", "wifi", "wifi apparaat", "wifi-apparaat", "wi-fi", "wifi device", "wifipool apparaat"},
-    "benisol": {"benisol", "zonder wifi", "no wifi", "standalone", "benisol apparaat"},
-    "display": {"display", "display apparaat", "display-apparaat", "scherm"},
+# synonymes pour matcher les choix utilisateur
+OPTION_SYNONYMS: Dict[str, Set[str]] = {
+    "gen1": {"gen1","gen 1","g1","type 1","gen1 apparaat","gen 1 apparaat","ik heb gen 1","ik heb een gen 1"},
+    "gen2": {"gen2","gen 2","g2","type 2","gen2 apparaat","gen 2 apparaat","ik heb gen 2","ik heb een gen 2"},
+    "gen3": {"gen3","gen 3","g3","type 3","gen3 apparaat","gen 3 apparaat","ik heb gen 3","ik heb een gen 3"},
+    "wifipool": {"wifipool","wifi","wifi apparaat","wifi-apparaat","wifi apparaten","wi-fi","wifi device","wifipool apparaat"},
+    "benisol": {"benisol","zonder wifi","no wifi","standalone","benisol apparaat","benisol (zonder wifi)"},
+    "display": {"display","display apparaat","display-apparaat","scherm","display apparaten"},
 }
 
-def _choice_key_for_user_input(row: dict, user_choice: str) -> Optional[str]:
-    if not user_choice:
+def _best_label_for_choice(options: Dict[str, dict], user_text: str) -> Optional[str]:
+    """Retourne la clé d'option la plus probable selon la saisie utilisateur."""
+    if not options:
         return None
-    opts = _get_options_map(row)
-    if not opts:
+    ut = _normalize(user_text)
+    labels = list(options.keys())
+    norm_map = {lab: _normalize(str(lab)) for lab in labels}
+
+    # 1) heuristique GEN/Wifipool/Benisol/Display
+    def label_contains(token: str) -> Optional[str]:
+        for lab, nl in norm_map.items():
+            if token in nl:
+                return lab
         return None
 
-    user = _normalize(user_choice)
+    # GEN
+    if any(t in ut for t in OPTION_SYNONYMS["gen1"]):
+        found = label_contains("gen1") or label_contains("gen 1")
+        if found: return found
+    if any(t in ut for t in OPTION_SYNONYMS["gen2"]):
+        found = label_contains("gen2") or label_contains("gen 2")
+        if found: return found
+    if any(t in ut for t in OPTION_SYNONYMS["gen3"]):
+        found = label_contains("gen3") or label_contains("gen 3")
+        if found: return found
 
-    # 1) exact/inclusion
-    for k in opts.keys():
-        nk = _normalize(k)
-        if user == nk or user in nk or nk in user:
-            return k
+    # Wifipool / Benisol / Display
+    if any(t in ut for t in OPTION_SYNONYMS["wifipool"]):
+        found = label_contains("wifipool") or label_contains("wifi")
+        if found: return found
+    if any(t in ut for t in OPTION_SYNONYMS["benisol"]):
+        found = label_contains("benisol") or label_contains("zonder wifi")
+        if found: return found
+    if any(t in ut for t in OPTION_SYNONYMS["display"]):
+        found = label_contains("display")
+        if found: return found
 
-    # 2) synonymes/canoniques
-    for canonical, variants in OPTION_SYNONYMS.items():
-        if user in variants or any(v in user for v in variants):
-            # si l'un des libellés ressemble au canonique
-            for k in opts.keys():
-                nk = _normalize(k)
-                if canonical in nk or nk in canonical:
-                    return k
-            if canonical in opts:
-                return canonical
-
-    # 3) fuzzy
+    # 2) fuzzy sur les libellés
     best = (0.0, None)
-    for k in opts.keys():
-        nk = _normalize(k)
-        sc = _ratio(user, nk)
+    for lab, nl in norm_map.items():
+        sc = _ratio(ut, nl)
         if sc > best[0]:
-            best = (sc, k)
-    return best[1] if best[0] >= 0.70 else None
+            best = (sc, lab)
+    if best[0] >= 0.70:
+        return best[1]
 
-def _best_jsonl_row(user_q: str, items: List[dict], min_score: float = 0.80) -> Optional[dict]:
-    if not items:
+    return None
+
+def _answer_from_option_block(block: dict, row: Optional[dict] = None) -> str:
+    """Compose une réponse à partir de l’option choisie, même sans champ 'antwoord'."""
+    parts: List[str] = []
+
+    # Préfixe: réponse générale éventuelle au niveau de la ligne
+    if row:
+        base = _row_get(row, "antwoord", "answer", "Antwoord", default="")
+        if isinstance(base, str) and base.strip():
+            parts.append(base.strip())
+
+    # Réponse courte au niveau de l’option
+    ans = _row_get(block, "antwoord", "answer", "Antwoord", default="")
+    rec = _row_get(block, "aanbeveling", "recommendation", "recommandation", default="")
+    if isinstance(ans, str) and ans.strip():
+        parts.append(ans.strip())
+    if isinstance(rec, str) and rec.strip():
+        parts.append(rec.strip())
+
+    # Textes simples
+    simple_keys = [
+        ("uitleg", "Uitleg"),
+        ("beschrijving", "Beschrijving"),
+        ("capaciteit", "Capaciteit"),
+        ("bekabeling", "Bekabeling"),
+        ("aantal_sondes", "Aantal sondes"),
+        ("met_higo", "Met Higo"),
+        ("zonder_higo", "Zonder Higo"),
+        ("type", "Type"),
+        ("opmerking", "Opmerking"),
+        ("tip_app", "Tip"),
+        ("opmerking_veiligheid", "Veiligheid"),
+        ("tip_ethernet", "Tip Ethernet"),
+    ]
+    for k, label in simple_keys:
+        val = block.get(k)
+        if isinstance(val, str) and val.strip():
+            parts.append(f"{label}: {val.strip()}")
+
+    # Listes -> puces
+    list_keys = [
+        ("te_bestellen", "Te bestellen"),
+        ("benodigd", "Benodigd"),
+        ("installatie", "Installatie"),
+        ("stappen", "Stappen"),
+        ("stappen_met_higo", "Stappen (met Higo)"),
+        ("stappen_zonder_higo", "Stappen (zonder Higo)"),
+        ("varianten", "Varianten"),
+        ("stappen_algemeen", "Stappen (algemeen)"),
+        ("tips", "Tips"),
+        ("punten", "Punten"),
+        ("links", "Links"),
+        ("verlengstukken", "Verlengstukken"),
+    ]
+    for k, label in list_keys:
+        lst = block.get(k)
+        if isinstance(lst, list) and lst:
+            bullets = "\n".join(f"- {str(x).strip()}" for x in lst if str(x).strip())
+            if bullets:
+                parts.append(f"{label}:\n{bullets}")
+
+    # Dictionnaires
+    dict_keys = [("specificaties", "Specificaties")]
+    for k, label in dict_keys:
+        dic = block.get(k)
+        if isinstance(dic, dict) and dic:
+            bullets = "\n".join(f"- {str(kk).strip()}: {str(vv).strip()}" for kk, vv in dic.items())
+            if bullets:
+                parts.append(f"{label}:\n{bullets}")
+
+    text = "\n\n".join(p for p in parts if p)
+    if not text.strip():
+        text = "(geen details beschikbaar voor deze keuze)"
+    return text
+
+# ---------------- Lookup helpers (robustes) ----------------
+def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
+    """1) match exact/inclusion sur question normalisée
+       2) fuzzy sur question
+       3) inclusion/fuzzy sur réponse si besoin."""
+    if not _FAQ:
         return None
     uq = _normalize(user_q)
 
-    # exact/inclusion sur la question
-    for row in items:
-        q = _row_get(row, "vraag", "Vraag", "question", "Question", default="")
-        qn = _normalize(q)
-        if qn and (uq == qn or uq in qn or qn in uq):
+    # exact / inclusion sur question
+    for row in _FAQ:
+        q = _normalize(row.get("question", ""))
+        if not q:
+            continue
+        if uq == q or uq in q or q in uq:
             return row
 
-    # fuzzy
+    # fuzzy sur question
     best = (0.0, None)
-    for row in items:
-        q = _row_get(row, "vraag", "Vraag", "question", "Question", default="")
-        qn = _normalize(q)
-        if not qn:
+    for row in _FAQ:
+        q = _normalize(row.get("question", ""))
+        if not q:
             continue
-        sc = _ratio(uq, qn)
+        sc = _ratio(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= min_score else None
+    if best[0] >= min_score:
+        return best[1]
 
-def _parse_extra_choice(extra: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not isinstance(extra, dict):
+    # fuzzy sur réponse
+    best = (0.0, None)
+    for row in _FAQ:
+        a = _normalize(row.get("answer", "") or "")
+        if a:
+            if uq and (uq in a or a in uq):
+                return row
+            sc = _ratio(uq, a)
+            if sc > best[0]:
+                best = (sc, row)
+    return best[1] if best[0] >= (min_score - 0.08) else None
+
+# --- recherche par mots-clés (synonymes utiles) ------------
+KW_MAP = {
+    "tlf": ["tlf"],
+    "thermometer": ["thermometer", "thermometers", "vloeistof thermometer", "vloeistofthermometer"],
+    "temperatuur": ["temperatuur", "temperatuursmeting", "temperatuurmeting", "temperatuursmetingen", "sensors", "sensor"],
+    "aansluiten": ["aansluiten", "aangesloten", "ondersteunen", "kan", "heeft"],
+    "twee": ["twee", "2", "tweede"],
+}
+def _expand_keywords(user_q: str) -> List[str]:
+    uq = _normalize(user_q)
+    toks = set(uq.split())
+    out: set[str] = set()
+    for base, variants in KW_MAP.items():
+        if base in toks or any(v in uq for v in variants):
+            out.update(variants + [base])
+    if "tlf" in out:
+        out.update(KW_MAP["temperatuur"])
+    return list(out)
+
+def _faq_keyword_search(user_q: str) -> dict | None:
+    if not _FAQ:
         return None
-    for key in ("choice", "option", "optie", "keuze", "gen"):
-        v = extra.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
+    kws = _expand_keywords(user_q)
+    if not kws:
+        return None
+    best = (0, None)
+    for row in _FAQ:
+        blob = _normalize((row.get("question") or "") + " " + (row.get("answer") or ""))
+        hits = sum(1 for k in kws if k in blob)
+        if hits > best[0]:
+            best = (hits, row)
+    return best[1] if best[0] >= 2 else None
+
+def _find_row_from_ref_or_question(ref: Optional[str], context_q: Optional[str]) -> Optional[dict]:
+    """Essaye d'identifier la ligne follow-up via un ref (id/question) ou la question d'origine."""
+    if not _FAQ:
+        return None
+    if ref:
+        # on compare soit id exact, soit question exacte
+        for row in _FAQ:
+            if str(row.get("id") or "") == ref or (row.get("question") == ref):
+                return row
+        # fallback: hash
+        for row in _FAQ:
+            if _make_row_ref(row) == ref:
+                return row
+    if context_q:
+        cand = _best_faq_match(context_q)
+        if cand:
+            return cand
     return None
+
+# ---------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------
+@app.get("/health")
+def health():
+    return {"status": "ok", "faq_rows": len(_FAQ)}
+
+@app.get("/debug/faq_lookup")
+def dbg_lookup(q: str):
+    r1 = _best_faq_match(q)
+    r2 = None if r1 else _faq_keyword_search(q)
+    return {
+        "q": q,
+        "best_match": bool(r1 or r2),
+        "via": "best" if r1 else ("keywords" if r2 else None),
+        "row": (r1 or r2),
+    }
+
+@app.post("/ingest")
+def ingest(req: IngestRequest):
+    res = ingest_path(req.path, req.source_type)
+    # recharger l'index si régénéré
+    global _FAQ
+    try:
+        with open(_FAQ_PATH, "r", encoding="utf-8") as f:
+            _FAQ = json.load(f)
+    except Exception:
+        pass
+    return {"reloaded": True, "faq_rows": len(_FAQ)}
+
+@app.post("/train/correction")
+def train_correction(req: CorrectionIn):
+    return add_correction(req.question, req.answer, req.tags)
+
+@app.post("/feedback")
+def feedback(req: FeedbackIn):
+    return save_feedback(req.dict())
 
 def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(extra, dict):
@@ -208,163 +384,82 @@ def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     if g in {"gen3", "gen 3"}: return "gen3"
     return None
 
-def _answer_from_option_block(block: dict) -> str:
-    ans = _row_get(block, "antwoord", "answer", "Antwoord", default="")
-    add = _row_get(block, "aanbeveling", "recommandation", "recommendation", default="")
-    if add:
-        return f"{ans}\n\n{add}"
-    return ans
-
-# ---------------------- Load FAQ at startup ----------------------
-os.makedirs(STORE_DIR, exist_ok=True)
-_FAQ: List[dict] = _load_jsonl(JSONL_TARGET)
-
-# ---------------------- Routes ----------------------
-@app.get("/health")
-def health():
-    return {"status": "ok", "faq_rows": len(_FAQ)}
-
-@app.get("/debug/faq_lookup")
-def dbg_lookup(q: str):
-    row = _best_jsonl_row(q, _FAQ)
-    return {"q": q, "found": bool(row), "row": row}
-
-@app.post("/ingest")
-def ingest(req: IngestRequest):
-    global _FAQ  # <- IMPORTANT: tout en haut de la fonction
-    path = req.path
-    if not os.path.exists(path):
-        return {"reloaded": False, "error": "file not found", "faq_rows": len(_FAQ)}
-    try:
-        os.makedirs(STORE_DIR, exist_ok=True)
-        shutil.copyfile(path, JSONL_TARGET)
-        _FAQ = _load_jsonl(JSONL_TARGET)
-        return {"reloaded": True, "faq_rows": len(_FAQ)}
-    except Exception as e:
-        return {"reloaded": False, "error": str(e), "faq_rows": len(_FAQ)}
-
-@app.post("/train/correction")
-def train_correction(req: CorrectionIn):
-    return add_correction(req.question, req.answer, req.tags)
-
-@app.post("/feedback")
-def feedback(req: FeedbackIn):
-    return save_feedback(req.dict())
-
-# ---------------------- Chat ----------------------
-def _best_faq_match(user_q: str) -> Optional[dict]:
-    return _best_jsonl_row(user_q, _FAQ)
-
-def _row_by_id(row_id: str) -> Optional[dict]:
-    if not row_id:
-        return None
-    for r in _FAQ:
-        if r.get("_row_id") == row_id:
-            return r
-    return None
-
-def _row_by_context_question(qtext: str) -> Optional[dict]:
-    if not qtext:
-        return None
-    return _best_jsonl_row(qtext, _FAQ, min_score=0.75)
-
+# --------------------------- core /chat ---------------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 1) Corrections admin
+    # 0) follow-up direct si on reçoit clarify_ref / context_question
+    extra = req.extra or {}
+    clarify_ref = str(extra.get("clarify_ref") or "").strip() or None
+    context_q = str(extra.get("context_question") or "").strip() or None
+    if clarify_ref or context_q:
+        row = _find_row_from_ref_or_question(clarify_ref, context_q)
+        if row and row.get("follow_up") and (row.get("options") or row.get("opties")):
+            options_map: Dict[str, dict] = row.get("options") or row.get("opties") or {}
+            chosen = _best_label_for_choice(options_map, q)
+            if chosen and chosen in options_map:
+                answer_text = _answer_from_option_block(options_map[chosen], row=row)
+                citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
+                return {"answer": answer_text, "citations": citations}
+            else:
+                # on redemande proprement le choix
+                labels = list(options_map.keys())
+                return {
+                    "answer": row.get("followup_q") or row.get("follow_up_question") or "Kun je je keuze bevestigen?",
+                    "clarify": {
+                        "ref": row.get("question") or _make_row_ref(row),
+                        "options": labels
+                    },
+                    "citations": [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}],
+                }
+
+    # 1) Correction admin prioritaire
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 1.b) Si on nous envoie une réponse à un follow-up (clarify_ref)
-    clarify_ref = None
-    if isinstance(req.extra, dict):
-        clarify_ref = req.extra.get("clarify_ref")
-
-    if clarify_ref:
-        row = _row_by_id(str(clarify_ref))
-        if row:
-            options_map = _get_options_map(row)
-            if options_map:
-                chosen_key = _choice_key_for_user_input(row, q) or _choice_key_for_user_input(row, _parse_extra_choice(req.extra) or "")
-                if chosen_key and chosen_key in options_map:
-                    answer_text = _answer_from_option_block(options_map[chosen_key])
-                    citations = [{"title": _row_get(row, "vraag", "Vraag", "question", "Question", default="FAQ"),
-                                  "source": "jsonl", "page": None}]
-                    return {"answer": answer_text, "citations": citations}
-
-                # pas trouvé -> renvoie la même demande avec options
-                followup_q = _row_get(row, "follow_up_question", "followup_question", default="Maak eerst een keuze:")
-                return {
-                    "answer": followup_q,
-                    "clarify": {
-                        "param": "choice",
-                        "options": list(options_map.keys()),
-                        "tips": GEN_TIPS_NL,
-                        "clarify_ref": row.get("_row_id"),
-                    },
-                    "citations": [{"title": _row_get(row, "vraag", "Vraag", "question", "Question", default="FAQ"),
-                                   "source": "jsonl", "page": None}],
-                }
-
-    # 2) Lookup JSONL classique
-    row = _best_faq_match(q)
-    if not row and isinstance(req.extra, dict):
-        # Si l'utilisateur a juste tapé "Gen 1", on essaie d'utiliser une question de contexte
-        ctx_q = req.extra.get("context_question")
-        row = _row_by_context_question(str(ctx_q)) if ctx_q else None
-
+    # 2) Lookup FAQ (ultra-robuste)
+    row = _best_faq_match(q) or _faq_keyword_search(q)
     if row:
-        options_map = _get_options_map(row)
-        follow_up = bool(_row_get(row, "follow_up", "followup", default=False))
-
-        # Si follow_up, tenter un choix déjà fourni dans extra (ex: boutons)
-        if follow_up and options_map:
-            choice_text = _parse_extra_choice(req.extra) if isinstance(req.extra, dict) else None
-            if choice_text:
-                chosen_key = _choice_key_for_user_input(row, choice_text)
-                if chosen_key and chosen_key in options_map:
-                    answer_text = _answer_from_option_block(options_map[chosen_key])
-                    citations = [{"title": _row_get(row, "vraag", "Vraag", "question", "Question", default="FAQ"),
-                                  "source": "jsonl", "page": None}]
-                    return {"answer": answer_text, "citations": citations}
-
-            # poser la clarification avec un identifiant stable
-            followup_q = _row_get(row, "follow_up_question", "followup_question", default="Maak eerst een keuze:")
-            opts_labels = list(options_map.keys())
+        # follow-up ?
+        if bool(row.get("follow_up")) and (row.get("options") or row.get("opties")):
+            labels = list((row.get("options") or row.get("opties")).keys())
             return {
-                "answer": followup_q,
+                "answer": row.get("followup_q") or row.get("follow_up_question") or "Kun je je keuze bevestigen?",
                 "clarify": {
-                    "param": "choice",
-                    "options": opts_labels,
-                    "tips": GEN_TIPS_NL,
-                    "clarify_ref": row.get("_row_id"),
+                    # on renvoie la question comme ref (facile à stocker côté front)
+                    "ref": row.get("question") or _make_row_ref(row),
+                    "options": labels,
+                    # tips utiles si c'est un cas GEN
+                    "tips": GEN_TIPS_NL if any("gen" in _normalize(l) for l in labels) else []
                 },
-                "citations": [{"title": _row_get(row, "vraag", "Vraag", "question", "Question", default="FAQ"),
-                               "source": "jsonl", "page": None}],
+                "citations": [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}],
             }
 
         # réponse directe
-        direct_answer = _row_get(row, "antwoord", "answer", "Antwoord", default=None)
-        if isinstance(direct_answer, str) and direct_answer.strip():
-            citations = [{"title": _row_get(row, "vraag", "Vraag", "question", "Question", default="FAQ"),
-                          "source": "jsonl", "page": None}]
-            return {"answer": direct_answer, "citations": citations}
+        extra_line = ""
+        if row.get("video_url"):
+            extra_line = "\n\nBekijk video: " + str(row["video_url"])
+        citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
+        answer_text = row.get("answer", "") or row.get("Antwoord", "") or ""
+        return {"answer": (answer_text + extra_line).strip(), "citations": citations}
 
-    # 3) Fallback RAG
-    extra_gen = _parse_extra_gen(req.extra if isinstance(req.extra, dict) else None)
+    # 3) Déterminer génération éventuelle (RAG)
+    extra_gen = _parse_extra_gen(req.extra)
     try:
         gen = extra_gen or detect_gen(q)
     except Exception:
         gen = extra_gen
 
+    # 4) Récupération RAG (filtrée si gen détectée)
     try:
         docs = retrieve(q, gen_filter=gen)
     except TypeError:
         docs = retrieve(q)
 
+    # 5) Si l’Excel/JSON marque des générations et que l’utilisateur n’a pas précisé -> demander GEN
     try:
         found: Set[str] = extract_found_gens(docs)
     except Exception:
@@ -378,11 +473,11 @@ def chat(req: ChatRequest):
             "citations": [],
         }
 
+    # 6) Réponse RAG standard (ou fallback si rien)
     if not docs:
         return {
             "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
             "citations": [],
         }
-
     answer, citations = generate_answer(q, docs)
     return {"answer": answer, "citations": citations}
