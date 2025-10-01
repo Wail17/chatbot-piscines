@@ -1,403 +1,335 @@
-# app/ingest.py
-import os
-import json
-import re
-import unicodedata
-from typing import List, Tuple, Any, Dict
+# app/main.py
+from typing import List, Optional, Dict, Any, Set
+import os, json, re, unicodedata
+from difflib import SequenceMatcher
 
-import pandas as pd
-from bs4 import BeautifulSoup
-from markdownify import markdownify as md
-from docx import Document as DocxDocument
-from pypdf import PdfReader
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
+from .ingest import ingest_path
+from .training import add_correction, search_correction, save_feedback
+from .config import CORRECTION_THRESHOLD, STORE_DIR
 
-from .config import (
-    CHROMA_DIR,
-    EMBEDDINGS_MODEL,
-    MAX_CHUNK_TOKENS,
-    CHUNK_OVERLAP_TOKENS,
-    COLLECTION_NAME,
-    STORE_DIR,
+app = FastAPI(title="Chatbot Piscines API")
+
+# ---------------------- CORS ----------------------
+ALLOWED_ORIGINS = [
+    "https://beniferro.eu",
+    "https://www.beniferro.eu",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "ngrok-skip-browser-warning",
+        "Authorization",
+        "Accept",
+        "Origin",
+    ],
+    expose_headers=["Content-Type"],
 )
 
-# ---------- Loaders texte classiques ----------
-def _load_pdf_pages(path: str) -> List[Tuple[str, int]]:
-    out: List[Tuple[str, int]] = []
+# ---------------------- Models ----------------------
+class ChatRequest(BaseModel):
+    query: str
+    audience: str = "client"
+    debug: bool = False
+    extra: Optional[Dict[str, Any]] = None  # e.g. {"choice":"Gen 1"}
+
+class IngestRequest(BaseModel):
+    path: str
+    source_type: str = "mixed"
+
+class CorrectionIn(BaseModel):
+    question: str
+    answer: str
+    tags: List[str] = []
+
+class FeedbackIn(BaseModel):
+    question: str
+    answer: str
+    good: bool
+    corrected_answer: Optional[str] = None
+    notes: Optional[str] = None
+    user: Optional[str] = None
+
+GEN_TIPS_NL = [
+    "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
+    "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, en bij een Gen 2 toestel maar 1 module.",
+    "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
+]
+
+# ---------------------- JSONL index ----------------------
+_FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
+def _load_faq():
     try:
-        reader = PdfReader(path)
-        for i, p in enumerate(reader.pages, start=1):
-            out.append(((p.extract_text() or "").strip(), i))
+        with open(_FAQ_PATH, "r", encoding="utf-8") as f:
+            rows = json.load(f)
+            # tolère 'opties' -> 'options'
+            for r in rows:
+                if "opties" in r and "options" not in r:
+                    r["options"] = r["opties"]
+            return rows
+    except Exception:
+        return []
+
+_FAQ: List[dict] = _load_faq()
+
+# ---------------------- lookup helpers ----------------------
+_PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
+
+def _normalize(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower().replace("\u00a0", " ")
+    s = re.sub(r"\s+", " ", s)
+    s = _PUNCT_RE.sub("", s)
+    return s.strip()
+
+def _ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, a, b).ratio()
+
+def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
+    """Matching robuste sur 'vraag' puis, si besoin, sur les contenus d'options/antwoord."""
+    if not _FAQ:
+        return None
+    uq = _normalize(user_q)
+
+    # 1) exact / inclusion sur vraag
+    for row in _FAQ:
+        q = _normalize(row.get("vraag", "") or row.get("question", ""))
+        if q and (uq == q or uq in q or q in uq):
+            return row
+
+    # 2) fuzzy sur vraag
+    best = (0.0, None)
+    for row in _FAQ:
+        q = _normalize(row.get("vraag", "") or row.get("question", ""))
+        if not q:
+            continue
+        sc = _ratio(uq, q)
+        if sc > best[0]:
+            best = (sc, row)
+    if best[0] >= min_score:
+        return best[1]
+
+    # 3) fallback: inclusion/fuzzy dans les réponses (top-level 'antwoord' ou options.*.antwoord)
+    best = (0.0, None)
+    for row in _FAQ:
+        blob = []
+        if row.get("antwoord"):
+            blob.append(str(row["antwoord"]))
+        opts = row.get("options") or {}
+        if isinstance(opts, dict):
+            for k, v in opts.items():
+                if isinstance(v, dict):
+                    if v.get("antwoord"):
+                        blob.append(str(v["antwoord"]))
+        text = _normalize(" ".join(blob))
+        if not text:
+            continue
+        if uq and (uq in text or text in uq):
+            return row
+        sc = _ratio(uq, text)
+        if sc > best[0]:
+            best = (sc, row)
+    return best[1] if best[0] >= (min_score - 0.08) else None
+
+# ---- choix / options helpers ----
+def _norm_label(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return " ".join(s.split())
+
+# petits synonymes utiles
+_SYNO = {
+    "gen1": "gen 1",
+    "gen2": "gen 2",
+    "gen3": "gen 3",
+    "wifipool": "wifi apparaten",
+    "wifi": "wifi apparaten",
+    "display": "display apparaten",
+    "benisol": "benisol",
+}
+
+def _row_options(row: dict) -> Dict[str, dict]:
+    opts = row.get("options")
+    return opts if isinstance(opts, dict) else {}
+
+def _match_option(choice_raw: str, opts: Dict[str, dict]) -> Optional[str]:
+    """Retourne la clé d'option la plus plausible (exact norm, synonymes, puis fuzzy)."""
+    if not choice_raw or not opts:
+        return None
+    labels = list(opts.keys())
+    if not labels:
+        return None
+
+    c = _norm_label(choice_raw)
+    # 1) exact normalisé
+    for k in labels:
+        if _norm_label(k) == c:
+            return k
+    # 2) synonymes
+    if c in _SYNO:
+        target = _norm_label(_SYNO[c])
+        for k in labels:
+            if _norm_label(k) == target:
+                return k
+    # 3) fuzzy
+    best = (0.0, None)
+    for k in labels:
+        sc = _ratio(c, _norm_label(k))
+        if sc > best[0]:
+            best = (sc, k)
+    return best[1] if best[0] >= 0.70 else None
+
+def _answer_from_option(row: dict, key: str) -> Optional[str]:
+    opts = _row_options(row)
+    if key not in opts or not isinstance(opts[key], dict):
+        return None
+    ans = str(opts[key].get("antwoord") or "").strip()
+    rec = str(opts[key].get("aanbeveling") or "").strip()
+    if ans and rec:
+        return f"{ans}\n\nAanbeveling: {rec}"
+    return ans or None
+
+def _parse_choice(extra: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(extra, dict):
+        return None
+    v = extra.get("choice")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    # compat: si le front t’envoie encore "gen"
+    g = extra.get("gen")
+    return g.strip() if isinstance(g, str) and g.strip() else None
+
+# ---------------------- Routes ----------------------
+@app.get("/health")
+def health():
+    return {"status": "ok", "faq_rows": len(_FAQ)}
+
+@app.get("/debug/faq_lookup")
+def dbg_lookup(q: str):
+    row = _best_faq_match(q)
+    return {"q": q, "found": bool(row), "row": row}
+
+@app.post("/ingest")
+def ingest(req: IngestRequest):
+    res = ingest_path(req.path, req.source_type)
+    # recharge l'index si un JSONL a été traité
+    global _FAQ
+    _FAQ[:] = _load_faq()
+    return res
+
+@app.post("/train/correction")
+def train_correction(req: CorrectionIn):
+    return add_correction(req.question, req.answer, req.tags)
+
+@app.post("/feedback")
+def feedback(req: FeedbackIn):
+    return save_feedback(req.dict())
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    q = (req.query or "").strip()
+
+    # 1) corrections admin
+    ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    if ans:
+        used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
+        return {"answer": ans, "citations": [cite], "used_chunks": used}
+
+    # 2) JSONL lookup
+    row = _best_faq_match(q)
+    if row:
+        follow = bool(row.get("follow_up"))
+        vraag = row.get("vraag") or row.get("question") or "FAQ"
+        src = row.get("source") or "jsonl"
+
+        # Normalise les options
+        if "opties" in row and "options" not in row:
+            row["options"] = row["opties"]
+        options_dict = _row_options(row)
+        options_list = list(options_dict.keys())
+
+        # follow_up : pose la question OU répond si choix fourni
+        if follow:
+            choice_raw = _parse_choice(req.extra)
+            if choice_raw:
+                matched = _match_option(choice_raw, options_dict)
+                if matched:
+                    a = _answer_from_option(row, matched)
+                    if a:
+                        return {
+                            "answer": a,
+                            "citations": [{"title": vraag, "source": src, "page": None}],
+                        }
+                    # si pas d’answer trouvée pour cette option, on retombe en clarify
+            # -> demander le choix
+            prompt = row.get("follow_up_question") or "Kies een optie om verder te gaan:"
+            return {
+                "answer": prompt,
+                "clarify": {"param": "choice", "options": options_list},
+                "citations": [{"title": vraag, "source": src, "page": None}],
+            }
+
+        # pas de follow_up → réponse directe
+        direct = str(row.get("antwoord") or "").strip()
+        if not direct and options_list and len(options_list) == 1:
+            # tolérance: s’il n’y a qu’une option, on prend son antwoord
+            direct = _answer_from_option(row, options_list[0]) or ""
+        if direct:
+            return {
+                "answer": direct,
+                "citations": [{"title": vraag, "source": src, "page": None}],
+            }
+        # sinon, pas d’antwoord → continuer en RAG fallback
+
+    # 3) RAG fallback
+    # (on garde ta logique GEN si tu veux)
+    extra_gen = None
+    try:
+        if isinstance(req.extra, dict):
+            g = str(req.extra.get("gen", "")).strip().lower()
+            extra_gen = "gen1" if g in {"gen1", "gen 1"} else "gen2" if g in {"gen2", "gen 2"} else "gen3" if g in {"gen3", "gen 3"} else None
     except Exception:
         pass
-    return out
 
-def _load_docx(path: str) -> str:
     try:
-        doc = DocxDocument(path)
-        return "\n".join(p.text for p in doc.paragraphs)
+        gen = extra_gen or detect_gen(q)
     except Exception:
-        return ""
+        gen = extra_gen
 
-def _load_html(path: str) -> str:
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        html = f.read()
-    soup = BeautifulSoup(html, "lxml")
-    for t in soup(["script", "style", "noscript"]):
-        t.decompose()
-    return md(str(soup))
+    try:
+        docs = retrieve(q, gen_filter=gen)
+    except TypeError:
+        docs = retrieve(q)
 
-def _load_txt(path: str) -> str:
-    return open(path, "r", encoding="utf-8", errors="ignore").read()
+    try:
+        found: Set[str] = extract_found_gens(docs)
+    except Exception:
+        found = set()
 
-# ---------- Splitter ----------
-splitter = RecursiveCharacterTextSplitter(
-    chunk_size=MAX_CHUNK_TOKENS,
-    chunk_overlap=CHUNK_OVERLAP_TOKENS,
-    separators=["\n\n", "\n", ". ", " "],
-)
-
-# ---------- Vector store ----------
-def _get_vs() -> Chroma:
-    return Chroma(
-        persist_directory=CHROMA_DIR,
-        collection_name=COLLECTION_NAME,
-        embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
-    )
-
-# ---------- Helpers colonnes ----------
-def _norm_name(s: Any) -> str:
-    """Normalise un nom de colonne: lower, trim, retire accents & NBSP, compresse espaces."""
-    s = str(s).replace("\u00a0", " ")
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = " ".join(s.split())
-    return s.strip().lower()
-
-def _col_lookup(df: pd.DataFrame, *aliases) -> str:
-    """Retourne le nom de colonne réel (case-sensitive) à partir d'aliases tolérants."""
-    low = {_norm_name(c): c for c in df.columns}
-    for a in aliases:
-        key = _norm_name(a)
-        if key in low:
-            return low[key]
-    return ""
-
-def _boolish(v: Any) -> bool:
-    if v is None:
-        return False
-    s = str(v).strip().lower()
-    return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
-
-# ---------- Détection de la sous-question (ligne jaune) ----------
-def _extract_followup_question(answer_text: str) -> str:
-    """
-    Renvoie la première ligne courte qui finit par '?'
-    (typiquement la sous-question en tête de 'Antwoord').
-    """
-    if not answer_text:
-        return ""
-    for line in answer_text.splitlines():
-        s = line.strip()
-        if s.endswith("?") and 3 <= len(s) <= 220:
-            return s
-        # on s'arrête très vite : la question jaune est tout en haut
-        if s and len(s) > 220:
-            break
-    return ""
-
-# ---------- Découpe des branches ----------
-# Variantes "gen 1" / "gen2" / "voor gen 1 apparaten" …
-_GEN1_MARK = re.compile(r"(^|\n)\s*(voor\s*)?gen[\s\-]*1[^:\n]*[:\-]?\s*", re.IGNORECASE)
-_GEN2_MARK = re.compile(r"(^|\n)\s*(voor\s*)?gen[\s\-]*2[^:\n]*[:\-]?\s*", re.IGNORECASE)
-_GEN3_MARK = re.compile(r"(^|\n)\s*(voor\s*)?gen[\s\-]*3[^:\n]*[:\-]?\s*", re.IGNORECASE)
-
-# Variantes "Wifipool :" / "Benisol :" (on tolère les espaces et tirets)
-_WIFIPOOL_MARK = re.compile(r"(^|\n)\s*wifipool\s*[:\-]\s*", re.IGNORECASE)
-_BENISOL_MARK  = re.compile(r"(^|\n)\s*benisol\s*[:\-]\s*",  re.IGNORECASE)
-
-def _slice_by_markers(text: str, markers: List[Tuple[str, re.Pattern]]) -> Dict[str, str]:
-    """
-    Découpe `text` selon une liste de marqueurs [(clé, regex), ...].
-    Retourne {clé: bloc}.
-    """
-    spans = []
-    for key, rgx in markers:
-        m = list(rgx.finditer(text))
-        if m:
-            # on prend le 1er match pour chaque clé
-            spans.append((key, m[0].start(), m[0].end()))
-    if not spans:
-        return {}
-
-    # ordonner par position
-    spans.sort(key=lambda t: t[1])
-
-    out: Dict[str, str] = {}
-    for i, (key, s, e) in enumerate(spans):
-        end = spans[i + 1][1] if i + 1 < len(spans) else len(text)
-        out[key] = text[e:end].strip()
-    return out
-
-def _detect_branches(answer_text: str, followup_q: str) -> Dict[str, Any]:
-    """
-    Détecte le type de branche et renvoie un objet:
-      {
-        "type": "gen" | "device" | None,
-        "options": ["gen1","gen2"] / ["wifipool","benisol"],
-        "labels":  {"gen1":"GEN1", ...},
-        "answers": {"gen1": "...", "gen2": "..."}
-      }
-    """
-    out = {"type": None, "options": [], "labels": {}, "answers": {}}
-
-    # Heuristique 1 : question qui contient 'gen' -> branche gen
-    if re.search(r"\bgen\s*[123]\b", followup_q, re.IGNORECASE):
-        blocks = _slice_by_markers(
-            answer_text,
-            [
-                ("gen1", _GEN1_MARK),
-                ("gen2", _GEN2_MARK),
-                ("gen3", _GEN3_MARK),
-            ],
-        )
-        # on ne garde que ceux présents
-        options = [k for k in ["gen1", "gen2", "gen3"] if k in blocks]
-        if options:
-            out["type"] = "gen"
-            out["options"] = options
-            out["labels"] = {k: k.upper().replace("GEN", "GEN ") for k in options}  # "gen1" -> "GEN 1"
-            out["answers"] = blocks
-            return out
-
-    # Heuristique 2 : question qui mentionne wifipool/benisol OU texte structuré en Wifipool: / Benisol:
-    if ("wifipool" in followup_q.lower()) or ("benisol" in followup_q.lower()) \
-       or (_WIFIPOOL_MARK.search(answer_text) and _BENISOL_MARK.search(answer_text)):
-        blocks = _slice_by_markers(
-            answer_text,
-            [
-                ("wifipool", _WIFIPOOL_MARK),
-                ("benisol", _BENISOL_MARK),
-            ],
-        )
-        options = [k for k in ["wifipool", "benisol"] if k in blocks]
-        if options:
-            out["type"] = "device"
-            out["options"] = options
-            out["labels"] = {"wifipool": "WIFIPOOL", "benisol": "BENISOL"}
-            out["answers"] = blocks
-            return out
-
-    return out
-
-# ---------- Ingestion Excel (FAQ) ----------
-def ingest_excel(path: str, source_type: str = "faq"):
-    """
-    Lis l'Excel et :
-      - choisit la feuille contenant 'Vraag'/'Antwoord',
-      - écrit store/faq_index.json,
-      - envoie les lignes dans Chroma (métadonnées scalaires).
-    Colonnes acceptées :
-      * 'Categorie'
-      * 'Vraag' / 'Question'
-      * 'Antwoord' / 'Answer'
-      * 'Foto'
-      * 'Filmpje' / 'Video' / 'Video_URL'
-      * 'Gen 1' / 'Gen1' / 'Gen 2' / 'Gen2' / 'Gen 3' / 'Gen3' (coches facultatives)
-      * autres colonnes cochées 'x' => tags
-    """
-    if not os.path.exists(path):
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
-
-    # 1) Choix de la feuille
-    xls = pd.ExcelFile(path, engine="openpyxl")
-    chosen_df, chosen_sheet = None, None
-    for sheet in xls.sheet_names:
-        df_try = xls.parse(sheet).fillna("")
-        c_q_try = _col_lookup(df_try, "Vraag", "Question", "Vragen")
-        c_a_try = _col_lookup(df_try, "Antwoord", "Answer")
-        if c_q_try and c_a_try:
-            chosen_df, chosen_sheet = df_try, sheet
-            break
-
-    if chosen_df is None:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
-
-    df = chosen_df
-
-    # 2) Résolution colonnes
-    c_q     = _col_lookup(df, "Vraag", "Question", "Vragen")
-    c_a     = _col_lookup(df, "Antwoord", "Answer")
-    c_cat   = _col_lookup(df, "Categorie", "Category")
-    c_photo = _col_lookup(df, "Foto", "Photo")
-    c_video = _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
-
-    # colonnes 'gen*' éventuellement cochées, converties en CSV "gen1,gen2"
-    gen_cols_real = [c for c in df.columns if "gen" in _norm_name(c)]
-
-    texts, metas, index_rows = [], [], []
-
-    # 3) Itération lignes
-    for _, row in df.iterrows():
-        vraag = str(row.get(c_q, "")).strip()
-        antw  = str(row.get(c_a, "")).strip()
-        if not vraag or not antw:
-            continue
-
-        category = str(row.get(c_cat, "")).strip() if c_cat else ""
-        photo    = str(row.get(c_photo, "")).strip() if c_photo else ""
-        video    = str(row.get(c_video, "")).strip() if c_video else ""
-
-        # Gens cochés (optionnel, pour filtrage RAG)
-        gens_list: List[str] = []
-        for gc in gen_cols_real:
-            val = row.get(gc)
-            if _boolish(val):
-                l = _norm_name(gc)
-                if "gen 1" in l or l == "gen1":
-                    gens_list.append("gen1")
-                elif "gen 2" in l or l == "gen2":
-                    gens_list.append("gen2")
-                elif "gen 3" in l or l == "gen3":
-                    gens_list.append("gen3")
-
-        # ---- Détection de la sous-question (ligne jaune) et des branches
-        followup_q = _extract_followup_question(antw)
-        # On retire la ligne question jaune du corps de réponse "antw_body"
-        antw_body = antw
-        if followup_q and antw.startswith(followup_q):
-            antw_body = antw[len(followup_q):].lstrip()
-
-        branches = _detect_branches(antw_body, followup_q)
-        ask_gen = bool(branches.get("type"))  # True si on a un type ET des options/answers
-
-        # ---- Préparation du JSON d'index
-        # base_answer: si pas de branche, on garde la réponse complète
-        base_answer = "" if ask_gen else antw_body
-
-        index_row = {
-            "question": vraag,
-            "answer": base_answer,
-            "category": category,
-            "gens": gens_list,                 # LISTE dans l'index JSON
-            "video_url": video or None,
-            "photo": photo or None,
-            "tags": [],                        # rempli juste après
-            "ask_gen": ask_gen,
-            "followup_q": followup_q or None,
-            "followup_type": branches.get("type"),
-            "branch_options": branches.get("options") or None,
-            "branch_labels": branches.get("labels") or None,
-            "branch_answers": branches.get("answers") or None,
-            "source": path,
-            "sheet": chosen_sheet,
+    if not gen and found:
+        options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
+        return {
+            "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
+            "clarify": {"param": "gen", "options": options, "tips": GEN_TIPS_NL},
+            "citations": [],
         }
 
-        # Tags génériques = colonnes cochées 'x', hors bases & hors gen*
-        base_cols = {c_q, c_a, c_cat, c_photo, c_video}
-        tags_list: List[str] = []
-        for col in df.columns:
-            cname = str(col)
-            if cname in base_cols:
-                continue
-            if "gen" in _norm_name(cname):
-                continue
-            v = row.get(col)
-            if _boolish(v):
-                tags_list.append(cname)
-        index_row["tags"] = tags_list
+    if not docs:
+        return {
+            "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
+            "citations": [],
+        }
 
-        index_rows.append(index_row)
-
-        # ---- Données envoyées à Chroma (métadonnées **scalaires** seulement)
-        text = f"Vraag: {vraag}\nAntwoord: {antw_body if antw_body else antw}"
-        gens_csv = ",".join(gens_list) if gens_list else ""
-        tags_csv = ",".join(tags_list) if tags_list else ""
-        title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
-
-        metas.append({
-            "source": path,
-            "title": title,
-            "source_type": source_type,
-            "categorie": category or "",
-            "gens": gens_csv,                     # CSV pour éviter 'complex metadata'
-            "video_url": video or "",
-            "photo": photo or "",
-            "tags": tags_csv,                     # CSV
-            "sheet": chosen_sheet or "",
-            # Indications utiles pour le /chat (bool + texte court), scalaires :
-            "ask_gen": bool(ask_gen),
-            "followup_q": (followup_q or ""),
-        })
-        texts.append(text)
-
-    if not texts:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
-
-    # 4) Sauvegardes
-    os.makedirs(STORE_DIR, exist_ok=True)
-    index_path = os.path.join(STORE_DIR, "faq_index.json")
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_rows, f, ensure_ascii=False, indent=2)
-
-    vs = _get_vs()
-    vs.add_texts(texts=texts, metadatas=metas)
-    vs.persist()
-
-    return {
-        "indexed_files": 1,
-        "indexed_chunks": len(texts),
-        "sheet_used": chosen_sheet,
-        "wrote_index": index_path,
-    }
-
-# ---------- Ingestion universelle (fichier ou dossier) ----------
-def ingest_path(path: str, source_type: str = "mixed"):
-    if not path:
-        return {"indexed_files": 0, "indexed_chunks": 0}
-
-    if os.path.isdir(path):
-        return ingest_folder(path, source_type)
-
-    ext = path.lower().rsplit(".", 1)[-1]
-    if ext in {"xlsx", "xls"}:
-        return ingest_excel(path, source_type="faq")
-
-    texts, metas = [], []
-    title = os.path.splitext(os.path.basename(path))[0]
-    if ext == "pdf":
-        for page_text, page_no in _load_pdf_pages(path):
-            if not page_text.strip():
-                continue
-            chunks = [c for c in splitter.split_text(page_text) if c.strip()]
-            texts.extend(chunks)
-            metas.extend(
-                [{"source": path, "title": title, "source_type": source_type, "page": page_no}]
-                * len(chunks)
-            )
-    elif ext == "docx":
-        text = _load_docx(path)
-        chunks = [c for c in splitter.split_text(text) if c.strip()]
-        texts.extend(chunks)
-        metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
-    elif ext in {"html", "htm"}:
-        text = _load_html(path)
-        chunks = [c for c in splitter.split_text(text) if c.strip()]
-        texts.extend(chunks)
-        metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
-    elif ext in {"txt", "md"}:
-        text = _load_txt(path)
-        chunks = [c for c in splitter.split_text(text) if c.strip()]
-        texts.extend(chunks)
-        metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
-
-    if not texts:
-        return {"indexed_files": 0, "indexed_chunks": 0}
-
-    vs = _get_vs()
-    vs.add_texts(texts=texts, metadatas=metas)
-    vs.persist()
-    return {"indexed_files": 1, "indexed_chunks": len(texts)}
+    answer, citations = generate_answer(q, docs)
+    return {"answer": answer, "citations": citations}
