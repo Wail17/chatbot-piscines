@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
-from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
 from .config import CORRECTION_THRESHOLD, STORE_DIR
 
