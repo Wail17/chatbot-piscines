@@ -234,13 +234,36 @@ def _best_label_match(value: str, labels: List[str]) -> Optional[str]:
 def health():
     return {"status": "ok", "faq_rows": len(_FAQ)}
 
+
 @app.post("/ingest")
 def ingest(req: IngestRequest):
-    # tu peux garder ta route /ingest existante qui écrit store/faq_index.json(l)
-    # Ici on se contente de recharger le fichier.
+    """
+    Charge le JSON/JSONL fourni, le copie dans STORE_DIR sous le nom standard,
+    puis recharge l'index en mémoire (_FAQ).
+    """
+    path = (req.path or "").strip()
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=400, detail=f"file not found: {path}")
+
+    os.makedirs(STORE_DIR, exist_ok=True)
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in {".jsonl", ".json"}:
+        raise HTTPException(status_code=400, detail="expected .jsonl or .json")
+
+    target = os.path.join(
+        STORE_DIR,
+        "faq_index.jsonl" if ext == ".jsonl" else "faq_index.json"
+    )
+
+    # copie dans le STORE_DIR
+    shutil.copyfile(path, target)
+
+    # recharge en mémoire
     global _FAQ
     _FAQ[:] = _load_faq()
-    return {"reloaded": True, "faq_rows": len(_FAQ)}
+
+    return {"reloaded": True, "faq_rows": len(_FAQ), "target": target}
 
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
