@@ -55,10 +55,19 @@ FAQ_INDEX_PATH = os.path.join(STORE_DIR, "faq_index.json")
 _FAQ: List[Dict[str, Any]] = []
 
 def _normalize(s: str) -> str:
-    s = (s or "").lower().strip()
-    s = re.sub(r"\s+", " ", s)        # espaces
-    s = re.sub(r"[“”«»\"'`]", "", s)  # guillemets
-    return s
+    # lower + remove accents
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower()
+
+    # normalize spaces (NBSP -> space, collapse)
+    s = s.replace("\u00a0", " ")
+    s = re.sub(r"\s+", " ", s)
+
+    # remove punctuation and any spaces around it (handles "module ?" vs "module?")
+    s = re.sub(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*", "", s)
+
+    return s.strip()
 
 def _load_faq_index():
     global _FAQ
@@ -70,28 +79,26 @@ def _load_faq_index():
 
 _load_faq_index()
 
-def _best_faq_match(user_q: str, min_score: float = 0.90) -> Optional[Dict[str, Any]]:
+def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
     """
-    Cherche la meilleure ligne de l'Excel par similarité :
-    - exact / inclusion
-    - sinon ratio difflib >= min_score
-    Renvoie la dict de la ligne ou None.
+    Exact/inclusion match after normalization, else fuzzy (difflib) with a slightly
+    lower threshold to survive tiny typos/spaces differences from Excel.
     """
     if not _FAQ:
         return None
     uq = _normalize(user_q)
-    best: Tuple[float, Dict[str, Any]] = (0.0, None)
+    best: tuple[float, dict | None] = (0.0, None)
 
     for row in _FAQ:
         q = _normalize(row.get("question", ""))
         if not q:
             continue
 
-        # exact ou inclusion -> score fort
+        # exact or inclusion -> immediate hit
         if uq == q or uq in q or q in uq:
             return row
 
-        # sinon fuzzy
+        # fuzzy
         score = SequenceMatcher(None, uq, q).ratio()
         if score > best[0]:
             best = (score, row)
