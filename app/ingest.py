@@ -1,6 +1,7 @@
 # app/ingest.py
 import os
 import json
+import unicodedata
 from typing import List, Tuple
 
 import pandas as pd
@@ -19,11 +20,12 @@ from .config import (
     MAX_CHUNK_TOKENS,
     CHUNK_OVERLAP_TOKENS,
     COLLECTION_NAME,
-    STORE_DIR,                # <— new: pour écrire faq_index.json
+    STORE_DIR,  # pour écrire faq_index.json
 )
 
-# ---------- Loaders texte classiques ----------
+# -------------------- Loaders texte classiques --------------------
 def _load_pdf_pages(path: str) -> List[Tuple[str, int]]:
+    """Retourne [(texte_page, index_page), ...] à partir d'un PDF."""
     out: List[Tuple[str, int]] = []
     try:
         reader = PdfReader(path)
@@ -33,12 +35,14 @@ def _load_pdf_pages(path: str) -> List[Tuple[str, int]]:
         pass
     return out
 
+
 def _load_docx(path: str) -> str:
     try:
         doc = DocxDocument(path)
         return "\n".join(p.text for p in doc.paragraphs)
     except Exception:
         return ""
+
 
 def _load_html(path: str) -> str:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -48,17 +52,20 @@ def _load_html(path: str) -> str:
         t.decompose()
     return md(str(soup))
 
+
 def _load_txt(path: str) -> str:
     return open(path, "r", encoding="utf-8", errors="ignore").read()
 
-# ---------- Splitter ----------
+
+# -------------------- Splitter --------------------
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=MAX_CHUNK_TOKENS,
     chunk_overlap=CHUNK_OVERLAP_TOKENS,
     separators=["\n\n", "\n", ". ", " "],
 )
 
-# ---------- Vector store ----------
+
+# -------------------- Vector store --------------------
 def _get_vs() -> Chroma:
     return Chroma(
         persist_directory=CHROMA_DIR,
@@ -66,7 +73,8 @@ def _get_vs() -> Chroma:
         embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
     )
 
-# ---------- Ingestion dossier (txt/pdf/docx/html) ----------
+
+# -------------------- Ingestion dossier (txt/pdf/docx/html) --------------------
 def ingest_folder(root: str, source_type: str = "mixed"):
     texts, metas = [], []
     file_count = 0
@@ -133,145 +141,184 @@ def ingest_folder(root: str, source_type: str = "mixed"):
     vs.persist()
     return {"indexed_files": file_count, "indexed_chunks": len(texts)}
 
-# ---------- Helpers ----------
+
+# -------------------- Helpers --------------------
+def _norm(s: str) -> str:
+    """
+    Normalise un en-tête: minuscules, accents supprimés, non-alphanum -> '_'.
+    Permet de matcher 'Gen 1', 'Gen1', 'FR Réponse', 'DE Frange/Frage', etc.
+    """
+    if not isinstance(s, str):
+        s = str(s or "")
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = s.strip().lower()
+    out = []
+    for ch in s:
+        out.append(ch if ch.isalnum() else "_")
+    return "_".join("".join(out).split())
+
+
 def _boolish(v) -> bool:
     if v is None:
         return False
     s = str(v).strip().lower()
-    return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
+    return s in {"1", "true", "x", "✓", "yes", "ja", "oui", "ok"}
 
-def _col_lookup(df: pd.DataFrame, *aliases) -> str:
-    """
-    Retourne le nom de colonne réel (case-sensitive) à partir d'aliases insensibles à la casse.
-    """
-    low = {c.lower(): c for c in df.columns}
-    for a in aliases:
-        if a and a.lower() in low:
-            return low[a.lower()]
-    return ""
 
-# ---------- Ingestion Excel (FAQ) ----------
+# -------------------- Ingestion Excel (FAQ) --------------------
 def ingest_excel(path: str, source_type: str = "faq"):
     """
-    Lit un Excel de FAQ et :
-      - écrit un index JSON (store/faq_index.json) pour lookup direct
-      - envoie chaque ligne (question/réponse) dans Chroma avec métadonnées riches
-    Colonnes tolérées (insensible à la casse):
-      * 'Categorie' (optionnel)
-      * 'Vraag' (obligatoire)
-      * 'Antwoord' (obligatoire)
-      * 'Foto' (optionnel)
-      * 'Filmpje' / 'Video' / 'Video_URL' (optionnel)
-      * 'AskGen' (optionnel) -> True/False/'x'
-      * 'Gen1', 'Gen 1', 'Gen2', 'Gen 2', 'Gen3' ... (optionnels)
-      * Toutes les autres colonnes cochées 'x' seront mises dans 'tags'
+    Lit un Excel de FAQ (multi-langue par ligne) et envoie chaque paire Q/A dans Chroma.
+    - Couvre les entêtes tolérantes (accents/espaces/variantes).
+    - Détecte GEN1/GEN2/GEN3, pose ask_gen=True s'il y a au moins une croix GEN.
+    - Récupère des tags produits (wifipool, display, vloeibare chloor, etc.)
+    - Prend en compte photo / video si fournis.
+    - Ecrit aussi un index JSON 'store/faq_index.json' pour un lookup rapide.
     """
     if not os.path.exists(path):
         return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
 
-    df = pd.read_excel(path, engine="openpyxl").fillna("")
+    df = pd.read_excel(path, engine="openpyxl")
+    # mapping nom_normalise -> nom_reel
+    norm2real = { _norm(c): c for c in df.columns }
 
-    # Colonnes de base
-    c_q = _col_lookup(df, "Vraag", "Question", "Vragen")
-    c_a = _col_lookup(df, "Antwoord", "Answer")
-    if not c_q or not c_a:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
+    def get_col(possible_norm_keys: set[str]) -> str | None:
+        for key in possible_norm_keys:
+            if key in norm2real:
+                return norm2real[key]
+        return None
 
-    c_cat   = _col_lookup(df, "Categorie", "Category")
-    c_photo = _col_lookup(df, "Foto", "Photo")
-    c_video = _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
+    # Colonnes par langue (tolère variantes)
+    LANG_COLS = {
+        "nl": {"q": {"vraag"}, "a": {"antwoord"}},
+        "fr": {"q": {"fr_question"}, "a": {"fr_reponse"}},
+        "en": {"q": {"en_question"}, "a": {"en_answer"}},
+        "de": {"q": {"de_frage", "de_frange", "de_vraag", "de_question"}, "a": {"de_antwort"}},
+    }
 
-    # Générations (toutes colonnes contenant "gen")
-    gen_cols_real = [c for c in df.columns if "gen" in c.lower()]
-    # AskGen explicite optionnelle
-    c_askgen = _col_lookup(df, "AskGen", "Ask Gen", "Ask_Gen")
+    # Au moins une paire Q/A doit exister
+    has_any_lang = False
+    for lang, qa in LANG_COLS.items():
+        cq = get_col(qa["q"])
+        ca = get_col(qa["a"])
+        if cq and ca:
+            has_any_lang = True
+            break
+    if not has_any_lang:
+        return {
+            "indexed_files": 0,
+            "indexed_chunks": 0,
+            "error": "Kolommen 'Vraag'/'Antwoord' ontbreken (of FR/EN/DE Q/A)"
+        }
 
-    # Construction des données
+    # catégories / médias
+    col_categorie = get_col({"categorie", "category"})
+    col_foto = get_col({"foto", "photo", "image"})
+    col_video = get_col({"filmpje", "video", "video_url", "video_url_", "youtube"})
+
+    # GEN et produits
+    GEN_KEYS = {
+        "gen1": {"gen_1", "gen1"},
+        "gen2": {"gen_2", "gen2"},
+        "gen3": {"gen_3", "gen3"},
+    }
+    PRODUCT_KEYS = {
+        "wifipool": {"wifipool"},
+        "display": {"display"},
+        "vloeibare_chloor": {"vloeibare_chloor"},
+        "zoutelektrolyse": {"zoutelektrolyse"},
+        "epdm": {"epdm"},
+        "aut_kranen": {"aut_kranen"},
+        "frequentieregelaar": {"frequentieregelaar"},
+    }
+
+    # résout les colonnes réelles pour GEN et produits
+    GEN_COLS_REAL = {g: get_col(keys) for g, keys in GEN_KEYS.items()}
+    PROD_COLS_REAL = {p: get_col(keys) for p, keys in PRODUCT_KEYS.items()}
+
     texts, metas = [], []
     index_rows = []
 
+    # itère sur les lignes
     for _, row in df.iterrows():
-        vraag = str(row.get(c_q, "")).strip()
-        antw  = str(row.get(c_a, "")).strip()
-        if not vraag or not antw:
-            continue
-
-        category = str(row.get(c_cat, "")).strip() if c_cat else ""
-        photo    = str(row.get(c_photo, "")).strip() if c_photo else ""
-        video    = str(row.get(c_video, "")).strip() if c_video else ""
-
-        # Gens = toutes les colonnes "gen*" cochées
+        # construit la liste des GEN cochés
         gens = []
-        for gc in gen_cols_real:
-            val = row.get(gc)
-            if _boolish(val):
-                l = gc.strip().lower()
-                if "gen 1" in l or "gen1" in l: gens.append("gen1")
-                elif "gen 2" in l or "gen2" in l: gens.append("gen2")
-                elif "gen 3" in l or "gen3" in l: gens.append("gen3")
-
-        # AskGen: si colonne askgen ou si au moins une colonne GEN cochée
-        ask_gen = False
-        if c_askgen:
-            ask_gen = _boolish(row.get(c_askgen))
-        elif gens:
-            # Ton souhait : "si y'a une croix sur GEN1/GEN2... on POSE la question"
-            ask_gen = True
-
-        # Tags génériques : toutes les colonnes cochées 'x' (hors bases)
-        base_cols = {c_q, c_a, c_cat, c_photo, c_video, c_askgen}
-        tags = []
-        for col in df.columns:
-            cname = str(col)
-            if cname in base_cols:
+        for g, col in GEN_COLS_REAL.items():
+            if not col:
                 continue
-            # on ignore les colonnes Gen spécifiques (déjà traitées)
-            if "gen" in cname.lower():
+            if _boolish(row.get(col)):
+                gens.append(g)
+
+        # produits cochés
+        products = []
+        for p, col in PROD_COLS_REAL.items():
+            if not col:
                 continue
-            v = row.get(col)
-            if _boolish(v):
-                tags.append(cname)
+            if _boolish(row.get(col)):
+                products.append(p)
 
-        # Texte pour Chroma
-        text = f"Vraag: {vraag}\nAntwoord: {antw}"
-        title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
-        meta = {
-            "source": path,
-            "title": title,
-            "source_type": source_type,
-            "categorie": category or None,
-            "gens": gens or None,
-            "ask_gen": bool(ask_gen),
-            "video_url": video or None,
-            "photo": photo or None,
-            "tags": tags or None,
-        }
-        texts.append(text)
-        metas.append(meta)
+        categorie = (str(row.get(col_categorie)).strip() if col_categorie else None) or None
+        foto = (str(row.get(col_foto)).strip() if col_foto else None) or None
+        video = (str(row.get(col_video)).strip() if col_video else None) or None
 
-        # Ligne d’index JSON (lookup FAQ direct côté /chat)
-        index_rows.append({
-            "question": vraag,
-            "answer": antw,
-            "category": category,
-            "gens": gens,
-            "ask_gen": bool(ask_gen),
-            "video_url": video or None,
-            "photo": photo or None,
-            "tags": tags,
-            "source": path,
-        })
+        # ask_gen : si au moins une colonne GEN est cochée -> on doit demander
+        ask_gen = bool(gens)
+
+        # pour chaque langue dispo sur la ligne, créer un chunk
+        for lang, qa in LANG_COLS.items():
+            cq = get_col(qa["q"])
+            ca = get_col(qa["a"])
+            if not (cq and ca):
+                continue
+
+            q = str(row.get(cq) or "").strip()
+            a = str(row.get(ca) or "").strip()
+            if not q or not a:
+                continue
+
+            # texte indexé (simple et robuste)
+            text = f"Vraag: {q}\nAntwoord: {a}"
+            title = (q[:80] + "…") if len(q) > 80 else q
+
+            meta = {
+                "source": path,
+                "title": title,
+                "source_type": source_type,  # 'faq'
+                "categorie": categorie,
+                "gens": gens or None,
+                "products": products or None,
+                "ask_gen": ask_gen,
+                "foto": foto,
+                "video": video,
+                "lang": lang,
+            }
+            texts.append(text)
+            metas.append(meta)
+
+            # pour le lookup direct JSON
+            index_rows.append({
+                "question": q,
+                "answer": a,
+                "lang": lang,
+                "category": categorie,
+                "gens": gens,
+                "products": products,
+                "ask_gen": ask_gen,
+                "foto": foto,
+                "video": video,
+                "source": path,
+            })
 
     if not texts:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows with Q/A"}
 
-    # Écrire l'index JSON pour le lookup direct
+    # écrit un petit index JSON (utile pour debug/lookup direct)
     os.makedirs(STORE_DIR, exist_ok=True)
     index_path = os.path.join(STORE_DIR, "faq_index.json")
     with open(index_path, "w", encoding="utf-8") as f:
         json.dump(index_rows, f, ensure_ascii=False, indent=2)
 
-    # Pousser dans Chroma
+    # push dans Chroma
     vs = _get_vs()
     vs.add_texts(texts=texts, metadatas=metas)
     vs.persist()
@@ -282,8 +329,12 @@ def ingest_excel(path: str, source_type: str = "faq"):
         "wrote_index": index_path,
     }
 
-# ---------- Ingestion universelle (fichier ou dossier) ----------
+
+# -------------------- Ingestion universelle (fichier ou dossier) --------------------
 def ingest_path(path: str, source_type: str = "mixed"):
+    """
+    Routeur : dossier -> ingest_folder ; .xlsx/.xls -> ingest_excel ; sinon charge un fichier texte.
+    """
     if not path:
         return {"indexed_files": 0, "indexed_chunks": 0}
 
@@ -303,7 +354,17 @@ def ingest_path(path: str, source_type: str = "mixed"):
                 continue
             chunks = [c for c in splitter.split_text(page_text) if c.strip()]
             texts.extend(chunks)
-            metas.extend([{"source": path, "title": title, "source_type": source_type, "page": page_no}] * len(chunks))
+            metas.extend(
+                [
+                    {
+                        "source": path,
+                        "title": title,
+                        "source_type": source_type,
+                        "page": page_no,
+                    }
+                ]
+                * len(chunks)
+            )
     elif ext == "docx":
         text = _load_docx(path)
         chunks = [c for c in splitter.split_text(text) if c.strip()]
