@@ -229,22 +229,23 @@ def ingest_excel(path: str, source_type: str = "faq"):
 
         # ---- Métadonnées scalaires (CSV) pour Chroma
         # ---- Métadonnées scalaires (CSV) pour Chroma
-        gens_csv = ",".join(gens_list) if gens_list else None
-        tags_csv = ",".join(tags_list) if tags_list else None
+        gens_csv = ",".join(gens_list) if gens_list else ""
+        tags_csv = ",".join(tags_list) if tags_list else ""
 
         title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
         metas.append({
             "source": path,
             "title": title,
             "source_type": source_type,
-            "categorie": category or None,
+            "categorie": category or "",
             "gens": gens_csv,           # CSV
-            "video_url": video or None,
-            "photo": photo or None,
+            "video_url": video or "",
+            "photo": photo or "",
             "tags": tags_csv,           # CSV
-            "sheet": chosen_sheet,
+            "sheet": chosen_sheet or "",
         })
         texts.append(text)
+
 
 
         # ---- Index JSON (on garde les LISTES)
