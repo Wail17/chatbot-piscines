@@ -37,6 +37,47 @@ _GEN_PATTERNS = {
     "gen3": re.compile(r"\bgen[\s\-]?3\b", re.IGNORECASE),
 }
 
+
+# --- juste sous les autres regex ---
+_GEN_HEADER_RE = re.compile(r"(?im)^\s*gen\s*([123])\s*[:\-–\.]\s*")
+
+def _only_answer_part(text: str) -> str:
+    """Retourne uniquement la partie après 'Antwoord:' si présente."""
+    if not text:
+        return ""
+    parts = re.split(r"(?i)\bantwoord\s*:\s*", text, maxsplit=1)
+    return parts[1] if len(parts) == 2 else text
+
+def _extract_gen_block(raw_text: str, gen: str) -> str:
+    """
+    Découpe un 'Antwoord' qui contient 'Gen 1:' / 'Gen 2:' / 'Gen 3:'
+    et renvoie uniquement le bloc correspondant au gen demandé.
+    Si aucune entête 'Gen X' n'est trouvée, renvoie le texte original.
+    """
+    if not raw_text or not gen:
+        return raw_text or ""
+
+    body = _only_answer_part(raw_text)
+
+    matches = list(_GEN_HEADER_RE.finditer(body))
+    if not matches:
+        # pas de balises 'Gen X' -> on garde tel quel
+        return body.strip()
+
+    want = {"gen1": "1", "gen 1": "1", "gen2": "2", "gen 2": "2", "gen3": "3", "gen 3": "3"}.get(gen.lower())
+    if not want:
+        return body.strip()
+
+    for i, m in enumerate(matches):
+        current = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        if current == want:
+            return body[start:end].strip()
+
+    # si 'Gen X' demandé pas trouvé, on renvoie le texte complet
+    return body.strip()
+
 def detect_gen(text: str) -> Optional[str]:
     """Renvoie 'gen1' / 'gen2' / 'gen3' si détecté dans la question, sinon None."""
     t = (text or "")
@@ -301,8 +342,27 @@ def _collect_citations(docs) -> list:
     return citations
 
 
-def generate_answer(question: str, docs) -> Tuple[str, list]:
-    """Génère une réponse appuyée sur les docs fournis. Retourne (answer, citations)."""
+def generate_answer(question: str, docs, chosen_gen: str | None = None) -> Tuple[str, list]:
+    """
+    Si chosen_gen est fourni (gen1/gen2/gen3) et que le contexte contient des blocs 'Gen X:',
+    on renvoie **uniquement** ces blocs concaténés (sans LLM).
+    Sinon on retombe sur la génération LLM classique.
+    """
+    # 1) Mode "extraction déterministe" par GEN
+    if chosen_gen:
+        pieces = []
+        for d in docs or []:
+            block = _extract_gen_block(d.page_content or "", chosen_gen)
+            # si on a réellement extrait une sous-partie (et pas le texte inchangé)
+            if block and block != (d.page_content or "").strip():
+                pieces.append(block)
+        if pieces:
+            answer = "\n\n".join(pieces).strip()
+            citations = _collect_citations(docs)
+            logger.info("generate_answer: returned GEN-specific slices (gen=%s)", chosen_gen)
+            return answer, citations
+
+    # 2) Fallback LLM (comportement existant)
     messages = _build_messages(question, docs)
     resp = client.chat.completions.create(
         model=LLM_MODEL,
@@ -311,14 +371,6 @@ def generate_answer(question: str, docs) -> Tuple[str, list]:
     )
     answer = resp.choices[0].message.content
     citations = _collect_citations(docs)
-
-    # Log utile
-    formatted = []
-    for c in citations:
-        title = c.get("title") or c.get("source") or "Document"
-        page = c.get("page")
-        page_str = f" p.{page}" if page is not None else ""
-        formatted.append(f"{title}{page_str}")
-    logger.info("generate_answer: used %d chunks | citations=%s", len(docs or []), formatted)
-
+    ...
     return answer, citations
+
