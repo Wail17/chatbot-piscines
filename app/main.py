@@ -1,34 +1,36 @@
 # app/main.py
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
+import json
+import os
+import re
+from difflib import SequenceMatcher
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Import de base obligatoires
-from .rag import retrieve as _raw_retrieve, generate_answer
-
-# Imports optionnels (si absents on met des stubs)
-try:
-    from .rag import detect_gen as _detect_gen
-except Exception:
-    _detect_gen = None  # type: ignore
-
-try:
-    from .rag import extract_found_gens as _extract_found_gens
-except Exception:
-    _extract_found_gens = None  # type: ignore
-
+from .rag import (
+    retrieve,
+    generate_answer,
+    detect_gen,          # -> "gen1" / "gen2" / "gen3" ou None
+    extract_found_gens,  # -> set({"gen1","gen2"}) trouvé dans les metadata
+)
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
-from .config import CORRECTION_THRESHOLD
+from .config import CORRECTION_THRESHOLD, STORE_DIR
 
+# ------------------------------------------------------------------------------------
+# App
+# ------------------------------------------------------------------------------------
 app = FastAPI(title="Chatbot Piscines API")
 
+# ------------------------------------------------------------------------------------
+# CORS  (mets ici tes domaines de prod et de la page WP où s’intègre le widget)
+# ------------------------------------------------------------------------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
-    # "https://web-production-xxxx.up.railway.app",
+    # "https://web-production-XXXX.up.railway.app",  # si tu appelles direct l’API
 ]
 
 app.add_middleware(
@@ -46,7 +48,59 @@ app.add_middleware(
     expose_headers=["Content-Type"],
 )
 
-# ---------- Models ----------
+# ------------------------------------------------------------------------------------
+# Chargement de l’index FAQ (écrit par /ingest)
+# ------------------------------------------------------------------------------------
+FAQ_INDEX_PATH = os.path.join(STORE_DIR, "faq_index.json")
+_FAQ: List[Dict[str, Any]] = []
+
+def _normalize(s: str) -> str:
+    s = (s or "").lower().strip()
+    s = re.sub(r"\s+", " ", s)        # espaces
+    s = re.sub(r"[“”«»\"'`]", "", s)  # guillemets
+    return s
+
+def _load_faq_index():
+    global _FAQ
+    try:
+        with open(FAQ_INDEX_PATH, "r", encoding="utf-8") as f:
+            _FAQ = json.load(f)
+    except Exception:
+        _FAQ = []
+
+_load_faq_index()
+
+def _best_faq_match(user_q: str, min_score: float = 0.90) -> Optional[Dict[str, Any]]:
+    """
+    Cherche la meilleure ligne de l'Excel par similarité :
+    - exact / inclusion
+    - sinon ratio difflib >= min_score
+    Renvoie la dict de la ligne ou None.
+    """
+    if not _FAQ:
+        return None
+    uq = _normalize(user_q)
+    best: Tuple[float, Dict[str, Any]] = (0.0, None)
+
+    for row in _FAQ:
+        q = _normalize(row.get("question", ""))
+        if not q:
+            continue
+
+        # exact ou inclusion -> score fort
+        if uq == q or uq in q or q in uq:
+            return row
+
+        # sinon fuzzy
+        score = SequenceMatcher(None, uq, q).ratio()
+        if score > best[0]:
+            best = (score, row)
+
+    return best[1] if best[0] >= min_score else None
+
+# ------------------------------------------------------------------------------------
+# Modèles
+# ------------------------------------------------------------------------------------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
@@ -70,78 +124,30 @@ class FeedbackIn(BaseModel):
     notes: Optional[str] = None
     user: Optional[str] = None
 
+# Conseils NL pour reconnaître Gen1/Gen2 (affichable côté front si besoin)
 GEN_TIPS_NL = [
     "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
     "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, en bij een Gen 2 toestel maar 1 module.",
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
-# ---------- Small helpers ----------
-def _normalize_gen(x: Optional[str]) -> Optional[str]:
-    if not isinstance(x, str):
-        return None
-    s = x.strip().lower()
-    if s in {"gen1", "gen 1", "1"}:
-        return "gen1"
-    if s in {"gen2", "gen 2", "2"}:
-        return "gen2"
-    if s in {"gen3", "gen 3", "3"}:
-        return "gen3"
-    return None
-
-def _is_truthy(v: Any) -> bool:
-    if isinstance(v, bool):
-        return v
-    if v is None:
-        return False
-    return str(v).strip().lower() in {"1", "true", "yes", "ja", "oui"}
-
-def _first_followup(docs) -> str:
-    for d in docs or []:
-        fu = (d.metadata or {}).get("followup_q") or ""
-        if str(fu).strip():
-            return str(fu).strip()
-    return ""
-
-def _safe_detect_gen(text: str) -> Optional[str]:
-    try:
-        if _detect_gen is None:
-            return None
-        return _detect_gen(text)  # may return None
-    except Exception:
-        return None
-
-def _safe_extract_found_gens(docs) -> Set[str]:
-    try:
-        if _extract_found_gens is None:
-            return set()
-        return set(_extract_found_gens(docs) or [])
-    except Exception:
-        return set()
-
-def _safe_retrieve(question: str, gen_filter: Optional[str]):
-    """
-    Supporte retrieve(question) ET retrieve(question, gen_filter=...).
-    """
-    try:
-        if gen_filter:
-            return _raw_retrieve(question, gen_filter=gen_filter)
-        return _raw_retrieve(question)
-    except TypeError:
-        # Ancienne signature sans gen_filter
-        return _raw_retrieve(question)
-    except Exception:
-        # Dernier filet
-        return []
-
-# ---------- Routes ----------
+# ------------------------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------------------------
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "faq_rows": len(_FAQ)}
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):
-    return ingest_path(req.path, req.source_type)
+    """
+    Supporte dossiers, fichiers texte ET Excel (.xlsx/.xls).
+    Après ingestion, recharge l’index FAQ en mémoire.
+    """
+    out = ingest_path(req.path, req.source_type)
+    _load_faq_index()
+    out["faq_rows"] = len(_FAQ)
+    return out
 
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
@@ -151,56 +157,121 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
+# ---- (optionnel) debug pour tester le lookup direct
+@app.get("/debug/faq_lookup")
+def debug_faq_lookup(q: str):
+    row = _best_faq_match(q)
+    return {"query": q, "found": bool(row), "row": row}
+
 @app.post("/chat")
 def chat(req: ChatRequest):
-    try:
-        q = (req.query or "").strip()
+    q = (req.query or "").strip()
 
-        # 1) Corrections admin
-        ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
-        if ans:
-            used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
-            return {"answer": ans, "citations": [cite], "used_chunks": used}
+    # 0) Correction admin prioritaire
+    ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    if ans:
+        used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
+        return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-        # 2) GEN fournie/détectée
-        extra_gen = None
-        if isinstance(req.extra, dict) and "gen" in req.extra:
-            extra_gen = _normalize_gen(req.extra.get("gen"))
+    # 1) Lookup direct dans l’Excel (faq_index.json)
+    direct_row = _best_faq_match(q)
+    if direct_row:
+        # Si la ligne exige une clarification GEN ET que l’utilisateur n’a pas encore choisi
+        extra_gen = (req.extra or {}).get("gen") if isinstance(req.extra, dict) else None
+        if direct_row.get("ask_gen") and not extra_gen:
+            options = direct_row.get("gens") or ["gen1", "gen2"]
+            # formater en minuscules propres (["gen1","gen2",...])
+            opts = [str(x).lower() for x in options if str(x).strip()]
+            prompt = direct_row.get("followup_q") or "Hebt u een Gen 1 of een Gen 2 apparaat?"
 
-        detected = _safe_detect_gen(q)
-        gen = extra_gen or _normalize_gen(detected)
+            return {
+                "answer": prompt,
+                "clarify": {
+                    "param": "gen",
+                    "options": opts,
+                    "tips": GEN_TIPS_NL,
+                },
+                "citations": [{
+                    "title": direct_row.get("question") or "FAQ",
+                    "url": None,
+                    "source": direct_row.get("source"),
+                    "page": None,
+                }],
+                "used_chunks": None if not req.debug else [{
+                    "text": f"FAQ direct hit: {direct_row.get('question')}",
+                    "meta": {"source": direct_row.get("source"), "sheet": direct_row.get("sheet")}
+                }]
+            }
 
-        # 3) Pas de GEN : sondage sans filtre pour voir si ask_gen=True
-        if not gen:
-            probe_docs = _safe_retrieve(q, gen_filter=None)
-
-            should_ask = any(_is_truthy((d.metadata or {}).get("ask_gen")) for d in (probe_docs or []))
-            if should_ask:
-                options = sorted(list(_safe_extract_found_gens(probe_docs) & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
-                clarify_prompt = _first_followup(probe_docs) or "Hebt u een Gen 1 of een Gen 2 apparaat?"
-
-                return {
-                    "answer": clarify_prompt,
-                    "clarify": {"param": "gen", "options": options, "tips": GEN_TIPS_NL},
-                    "citations": [],
-                    "used_chunks": [] if req.debug else None,
-                }
-
-            answer, citations = generate_answer(q, probe_docs)
-            used = [{"text": d.page_content, "meta": d.metadata} for d in (probe_docs or [])] if req.debug else None
-            return {"answer": answer, "citations": citations, "used_chunks": used}
-
-        # 4) GEN connue -> recherche filtrée
-        docs = _safe_retrieve(q, gen_filter=gen)
-        answer, citations = generate_answer(q, docs)
-        used = [{"text": d.page_content, "meta": d.metadata} for d in (docs or [])] if req.debug else None
-        return {"answer": answer, "citations": citations, "used_chunks": used}
-
-    except Exception as e:
-        # Filet de sécurité pour éviter les 500 silencieux
+        # Sinon, renvoyer la réponse de la ligne Excel directement
+        answer = direct_row.get("answer") or direct_row.get("Antwoord") or "(geen antwoord)"
         return {
-            "answer": "Er is een fout opgetreden. Probeer het opnieuw of neem contact op met de support.",
-            "error": str(e),
-            "citations": [],
-            "used_chunks": None,
+            "answer": answer,
+            "citations": [{
+                "title": direct_row.get("question") or "FAQ",
+                "url": None,
+                "source": direct_row.get("source"),
+                "page": None,
+            }],
+            "used_chunks": None if not req.debug else [{
+                "text": f"FAQ direct hit: {direct_row.get('question')}",
+                "meta": {"source": direct_row.get("source"), "sheet": direct_row.get("sheet")}
+            }]
         }
+
+    # 2) Sinon, on passe au RAG
+    #    Déterminer la génération si fournie ou détectée dans la question
+    extra_gen = None
+    if isinstance(req.extra, dict):
+        g = str(req.extra.get("gen", "")).strip().lower()
+        if g in {"gen1", "gen 1"}:
+            extra_gen = "gen1"
+        elif g in {"gen2", "gen 2"}:
+            extra_gen = "gen2"
+        elif g in {"gen3", "gen 3"}:
+            extra_gen = "gen3"
+    try:
+        gen = extra_gen or detect_gen(q)   # peut renvoyer None
+    except NameError:
+        gen = extra_gen
+
+    # Récupération vectorielle (avec éventuel filtre gen)
+    try:
+        docs = retrieve(q, gen_filter=gen)
+    except TypeError:
+        docs = retrieve(q)
+
+    # Si l’Excel marque des générations et que l’utilisateur n’a pas précisé -> demander GEN
+    try:
+        found: Set[str] = extract_found_gens(docs)
+    except NameError:
+        found = set()
+
+    if not gen and found:
+        options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
+        return {
+            "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
+            "clarify": {
+                "param": "gen",
+                "options": options,
+                "tips": GEN_TIPS_NL,
+            },
+            "citations": [],
+            "used_chunks": [] if req.debug else None,
+        }
+
+    # 3) Générer la réponse RAG
+    if not docs:
+        # message gentil si aucun context
+        return {
+            "answer": (
+                "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. "
+                "Kun je meer details geven over wat je precies wilt weten?"
+            ),
+            "citations": [],
+            "used_chunks": [] if req.debug else None,
+        }
+
+    answer, citations = generate_answer(q, docs)
+    used = [{"text": d.page_content, "meta": d.metadata} for d in docs] if req.debug else None
+    return {"answer": answer, "citations": citations, "used_chunks": used}
