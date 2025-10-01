@@ -5,21 +5,26 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from .rag import (
-    retrieve,
-    generate_answer,
-    detect_gen,          # détecte "gen1"/"gen2"/"gen3" dans la question (ou None)
-    extract_found_gens,  # récupère {"gen1","gen2"} depuis les métadonnées des docs
-)
+# Import de base obligatoires
+from .rag import retrieve as _raw_retrieve, generate_answer
+
+# Imports optionnels (si absents on met des stubs)
+try:
+    from .rag import detect_gen as _detect_gen
+except Exception:
+    _detect_gen = None  # type: ignore
+
+try:
+    from .rag import extract_found_gens as _extract_found_gens
+except Exception:
+    _extract_found_gens = None  # type: ignore
+
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
 from .config import CORRECTION_THRESHOLD
 
 app = FastAPI(title="Chatbot Piscines API")
 
-# ---------------------------------------------------------------------
-# CORS : ajoute tes domaines (WP + éventuel domaine Railway si tu appelles direct)
-# ---------------------------------------------------------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
@@ -41,9 +46,7 @@ app.add_middleware(
     expose_headers=["Content-Type"],
 )
 
-# ---------------------------------------------------------------------
-# Payloads
-# ---------------------------------------------------------------------
+# ---------- Models ----------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
@@ -67,18 +70,13 @@ class FeedbackIn(BaseModel):
     notes: Optional[str] = None
     user: Optional[str] = None
 
-# Aide NL pour reconnaître Gen1/Gen2 (affichable côté front)
 GEN_TIPS_NL = [
     "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
-    "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, "
-    "en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, "
-    "en bij een Gen 2 toestel maar 1 module.",
+    "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, en bij een Gen 2 toestel maar 1 module.",
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
-# ---------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------
+# ---------- Small helpers ----------
 def _normalize_gen(x: Optional[str]) -> Optional[str]:
     if not isinstance(x, str):
         return None
@@ -96,21 +94,47 @@ def _is_truthy(v: Any) -> bool:
         return v
     if v is None:
         return False
-    s = str(v).strip().lower()
-    return s in {"1", "true", "yes", "ja", "oui"}
+    return str(v).strip().lower() in {"1", "true", "yes", "ja", "oui"}
 
 def _first_followup(docs) -> str:
-    """Retourne la première sous-question (followup_q) rencontrée dans les métadonnées."""
     for d in docs or []:
-        md = d.metadata or {}
-        fu = (md.get("followup_q") or "").strip()
-        if fu:
-            return fu
+        fu = (d.metadata or {}).get("followup_q") or ""
+        if str(fu).strip():
+            return str(fu).strip()
     return ""
 
-# ---------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------
+def _safe_detect_gen(text: str) -> Optional[str]:
+    try:
+        if _detect_gen is None:
+            return None
+        return _detect_gen(text)  # may return None
+    except Exception:
+        return None
+
+def _safe_extract_found_gens(docs) -> Set[str]:
+    try:
+        if _extract_found_gens is None:
+            return set()
+        return set(_extract_found_gens(docs) or [])
+    except Exception:
+        return set()
+
+def _safe_retrieve(question: str, gen_filter: Optional[str]):
+    """
+    Supporte retrieve(question) ET retrieve(question, gen_filter=...).
+    """
+    try:
+        if gen_filter:
+            return _raw_retrieve(question, gen_filter=gen_filter)
+        return _raw_retrieve(question)
+    except TypeError:
+        # Ancienne signature sans gen_filter
+        return _raw_retrieve(question)
+    except Exception:
+        # Dernier filet
+        return []
+
+# ---------- Routes ----------
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -129,65 +153,54 @@ def feedback(req: FeedbackIn):
 
 @app.post("/chat")
 def chat(req: ChatRequest):
-    q = (req.query or "").strip()
-
-    # 1) Correction admin prioritaire
-    ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
-    if ans:
-        used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
-        return {"answer": ans, "citations": [cite], "used_chunks": used}
-
-    # 2) GEN fournie/détectée
-    extra_gen = None
-    if isinstance(req.extra, dict) and "gen" in req.extra:
-        extra_gen = _normalize_gen(req.extra.get("gen"))
-
     try:
-        detected = detect_gen(q)  # peut renvoyer None
-    except NameError:
-        detected = None
+        q = (req.query or "").strip()
 
-    gen = extra_gen or _normalize_gen(detected)
+        # 1) Corrections admin
+        ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+        if ans:
+            used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
+            return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 3) Si pas de GEN -> on sonde sans filtre et on regarde ask_gen dans les métadonnées
-    if not gen:
-        probe_docs = retrieve(q, gen_filter=None)
+        # 2) GEN fournie/détectée
+        extra_gen = None
+        if isinstance(req.extra, dict) and "gen" in req.extra:
+            extra_gen = _normalize_gen(req.extra.get("gen"))
 
-        should_ask = False
-        for d in probe_docs or []:
-            md = d.metadata or {}
-            if _is_truthy(md.get("ask_gen")):
-                should_ask = True
-                break
+        detected = _safe_detect_gen(q)
+        gen = extra_gen or _normalize_gen(detected)
 
-        if should_ask:
-            # Options = Gens présentes; défaut ["gen1","gen2"] si rien n'est tagué
-            try:
-                found: Set[str] = extract_found_gens(probe_docs)
-            except NameError:
-                found = set()
-            options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
+        # 3) Pas de GEN : sondage sans filtre pour voir si ask_gen=True
+        if not gen:
+            probe_docs = _safe_retrieve(q, gen_filter=None)
 
-            clarify_prompt = _first_followup(probe_docs) or "Hebt u een Gen 1 of een Gen 2 apparaat?"
+            should_ask = any(_is_truthy((d.metadata or {}).get("ask_gen")) for d in (probe_docs or []))
+            if should_ask:
+                options = sorted(list(_safe_extract_found_gens(probe_docs) & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
+                clarify_prompt = _first_followup(probe_docs) or "Hebt u een Gen 1 of een Gen 2 apparaat?"
 
-            return {
-                "answer": clarify_prompt,
-                "clarify": {
-                    "param": "gen",
-                    "options": options,
-                    "tips": GEN_TIPS_NL,
-                },
-                "citations": [],
-                "used_chunks": [] if req.debug else None,
-            }
+                return {
+                    "answer": clarify_prompt,
+                    "clarify": {"param": "gen", "options": options, "tips": GEN_TIPS_NL},
+                    "citations": [],
+                    "used_chunks": [] if req.debug else None,
+                }
 
-        # Sinon on répond directement avec ces docs non filtrés
-        answer, citations = generate_answer(q, probe_docs)
-        used = [{"text": d.page_content, "meta": d.metadata} for d in probe_docs] if req.debug else None
+            answer, citations = generate_answer(q, probe_docs)
+            used = [{"text": d.page_content, "meta": d.metadata} for d in (probe_docs or [])] if req.debug else None
+            return {"answer": answer, "citations": citations, "used_chunks": used}
+
+        # 4) GEN connue -> recherche filtrée
+        docs = _safe_retrieve(q, gen_filter=gen)
+        answer, citations = generate_answer(q, docs)
+        used = [{"text": d.page_content, "meta": d.metadata} for d in (docs or [])] if req.debug else None
         return {"answer": answer, "citations": citations, "used_chunks": used}
 
-    # 4) GEN connue -> on filtre la recherche
-    docs = retrieve(q, gen_filter=gen)
-    answer, citations = generate_answer(q, docs)
-    used = [{"text": d.page_content, "meta": d.metadata} for d in docs] if req.debug else None
-    return {"answer": answer, "citations": citations, "used_chunks": used}
+    except Exception as e:
+        # Filet de sécurité pour éviter les 500 silencieux
+        return {
+            "answer": "Er is een fout opgetreden. Probeer het opnieuw of neem contact op met de support.",
+            "error": str(e),
+            "citations": [],
+            "used_chunks": None,
+        }
