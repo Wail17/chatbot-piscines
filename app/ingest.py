@@ -228,6 +228,7 @@ def ingest_excel(path: str, source_type: str = "faq"):
         text = f"Vraag: {vraag}\nAntwoord: {antw}"
 
         # ---- Métadonnées scalaires (CSV) pour Chroma
+        # ---- Métadonnées scalaires (CSV) pour Chroma
         gens_csv = ",".join(gens_list) if gens_list else None
         tags_csv = ",".join(tags_list) if tags_list else None
 
@@ -244,6 +245,7 @@ def ingest_excel(path: str, source_type: str = "faq"):
             "sheet": chosen_sheet,
         })
         texts.append(text)
+
 
         # ---- Index JSON (on garde les LISTES)
         index_rows.append({
