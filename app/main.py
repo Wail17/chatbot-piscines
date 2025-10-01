@@ -19,13 +19,10 @@ from .config import CORRECTION_THRESHOLD, STORE_DIR
 
 app = FastAPI(title="Chatbot Piscines API")
 
-# ---------------------------------------------------------------------
-# CORS
-# ---------------------------------------------------------------------
+# ---------------------- CORS ----------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
-    # "https://web-production-XXXX.up.railway.app",
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -42,9 +39,7 @@ app.add_middleware(
     expose_headers=["Content-Type"],
 )
 
-# ---------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------
+# ---------------------- Models ----------------------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
@@ -74,9 +69,7 @@ GEN_TIPS_NL = [
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
-# ---------------------------------------------------------------------
-# Load FAQ index (écrit par /ingest)
-# ---------------------------------------------------------------------
+# ---------------------- FAQ index ----------------------
 _FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
 try:
     with open(_FAQ_PATH, "r", encoding="utf-8") as f:
@@ -84,20 +77,15 @@ try:
 except Exception:
     _FAQ = []
 
-# ---------------- Lookup helpers (robustes) ----------------
+# ---------------------- lookup helpers ----------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 
 def _normalize(s: str) -> str:
-    # lower + retire accents
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     s = s.lower()
-
-    # NBSP -> espace + compresser
     s = s.replace("\u00a0", " ")
     s = re.sub(r"\s+", " ", s)
-
-    # retirer ponctuation (et espaces autour)
     s = _PUNCT_RE.sub("", s)
     return s.strip()
 
@@ -108,16 +96,12 @@ def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
     if not _FAQ:
         return None
     uq = _normalize(user_q)
-
-    # 1) exact / inclusion sur question
+    # exact/inclusion
     for row in _FAQ:
         q = _normalize(row.get("question", ""))
-        if not q:
-            continue
-        if uq == q or uq in q or q in uq:
+        if q and (uq == q or uq in q or q in uq):
             return row
-
-    # 2) fuzzy sur question
+    # fuzzy
     best = (0.0, None)
     for row in _FAQ:
         q = _normalize(row.get("question", ""))
@@ -128,8 +112,7 @@ def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
             best = (sc, row)
     if best[0] >= min_score:
         return best[1]
-
-    # 3) Inclusion/fuzzy sur réponse
+    # inclusion/fuzzy sur réponse
     best = (0.0, None)
     for row in _FAQ:
         a = _normalize(row.get("answer", ""))
@@ -142,7 +125,6 @@ def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
             best = (sc, row)
     return best[1] if best[0] >= (min_score - 0.08) else None
 
-# --- recherche par mots-clés (synonymes utiles) ------------
 KW_MAP = {
     "tlf": ["tlf"],
     "thermometer": ["thermometer", "thermometers", "vloeistof thermometer", "vloeistofthermometer"],
@@ -150,7 +132,6 @@ KW_MAP = {
     "aansluiten": ["aansluiten", "aangesloten", "ondersteunen", "kan", "heeft"],
     "twee": ["twee", "2", "tweede"],
 }
-
 def _expand_keywords(user_q: str) -> List[str]:
     uq = _normalize(user_q)
     toks = set(uq.split())
@@ -158,7 +139,7 @@ def _expand_keywords(user_q: str) -> List[str]:
     for base, variants in KW_MAP.items():
         if base in toks or any(v in uq for v in variants):
             out.update(variants + [base])
-    if ("tlf" in out) and ({"thermometer"} & set(KW_MAP.keys())):
+    if "tlf" in out:
         out.update(KW_MAP["temperatuur"])
     return list(out)
 
@@ -168,54 +149,15 @@ def _faq_keyword_search(user_q: str) -> dict | None:
     kws = _expand_keywords(user_q)
     if not kws:
         return None
-
     best = (0, None)
     for row in _FAQ:
         blob = _normalize((row.get("question") or "") + " " + (row.get("answer") or ""))
         hits = sum(1 for k in kws if k in blob)
         if hits > best[0]:
             best = (hits, row)
-
     return best[1] if best[0] >= 2 else None
 
-# ---------------- extraction du bloc "Gen X" dans la réponse Excel -------------
-_GEN_HEADER_RE = re.compile(r"(?im)^\s*gen\s*([123])\s*[:\-–\.]\s*")
-
-def _only_answer_part(text: str) -> str:
-    if not text:
-        return ""
-    parts = re.split(r"(?i)\bantwoord\s*:\s*", text, maxsplit=1)
-    return parts[1] if len(parts) == 2 else text
-
-def _extract_gen_block(raw_text: str, gen: Optional[str]) -> str:
-    """
-    Découpe un 'Antwoord' qui contient 'Gen 1:' / 'Gen 2:' / 'Gen 3:'
-    et renvoie uniquement le bloc correspondant.
-    Si aucune entête 'Gen X' n'est trouvée, renvoie le texte original.
-    """
-    if not raw_text or not gen:
-        return raw_text or ""
-    body = _only_answer_part(raw_text)
-
-    matches = list(_GEN_HEADER_RE.finditer(body))
-    if not matches:
-        return body.strip()
-
-    want = {"gen1": "1", "gen 1": "1", "gen2": "2", "gen 2": "2", "gen3": "3", "gen 3": "3"}.get(gen.lower())
-    if not want:
-        return body.strip()
-
-    for i, m in enumerate(matches):
-        current = m.group(1)
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        if current == want:
-            return body[start:end].strip()
-    return body.strip()
-
-# ---------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------
+# ---------------------- Routes ----------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "faq_rows": len(_FAQ)}
@@ -224,17 +166,11 @@ def health():
 def dbg_lookup(q: str):
     r1 = _best_faq_match(q)
     r2 = None if r1 else _faq_keyword_search(q)
-    return {
-        "q": q,
-        "best_match": bool(r1 or r2),
-        "via": "best" if r1 else ("keywords" if r2 else None),
-        "row": (r1 or r2),
-    }
+    return {"q": q, "best_match": bool(r1 or r2), "via": "best" if r1 else ("keywords" if r2 else None), "row": (r1 or r2)}
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):
     res = ingest_path(req.path, req.source_type)
-    # recharger l'index si régénéré
     global _FAQ
     try:
         with open(_FAQ_PATH, "r", encoding="utf-8") as f:
@@ -251,38 +187,47 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
+def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(extra, dict):
+        return None
+    g = str(extra.get("gen", "")).strip().lower()
+    if g in {"gen1", "gen 1"}: return "gen1"
+    if g in {"gen2", "gen 2"}: return "gen2"
+    if g in {"gen3", "gen 3"}: return "gen3"
+    return None
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 0) Déterminer GEN le plus tôt possible (depuis extra ou dans la question)
-    extra_gen = None
-    if isinstance(req.extra, dict):
-        g = str(req.extra.get("gen", "")).strip().lower()
-        if g in {"gen1", "gen 1"}:
-            extra_gen = "gen1"
-        elif g in {"gen2", "gen 2"}:
-            extra_gen = "gen2"
-        elif g in {"gen3", "gen 3"}:
-            extra_gen = "gen3"
-    try:
-        gen = extra_gen or detect_gen(q)
-    except NameError:
-        gen = extra_gen
-
-    # 1) Correction admin prioritaire
+    # 1) corrections admin
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 2) Lookup FAQ (robuste)
+    # 2) lookup FAQ
     row = _best_faq_match(q) or _faq_keyword_search(q)
     if row:
         ask_gen_flag = bool(row.get("ask_gen"))
+        # si l’Excel demandait GEN et qu’on a déjà la GEN => renvoyer la réponse spécifique
+        gen_from_req = _parse_extra_gen(req.extra) or detect_gen(q) if callable(detect_gen) else None
+        if ask_gen_flag and gen_from_req:
+            if gen_from_req == "gen1" and (row.get("answer_gen1")):
+                ans_text = row["answer_gen1"]
+            elif gen_from_req == "gen2" and (row.get("answer_gen2")):
+                ans_text = row["answer_gen2"]
+            else:
+                # si pas de réponse spécifique trouvée, on retombe sur la clarification
+                ans_text = None
 
-        # a) si la ligne exige GEN et qu'on ne l'a pas => clarify
-        if ask_gen_flag and not gen:
+            if ans_text:
+                extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
+                citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
+                return {"answer": ans_text + extra_line, "citations": citations}
+
+        # sinon : poser la clarification
+        if ask_gen_flag:
             opts = ["gen1", "gen2"]
             return {
                 "answer": row.get("followup_q") or "Hebt u een Gen 1 of een Gen 2 apparaat?",
@@ -290,26 +235,26 @@ def chat(req: ChatRequest):
                 "citations": [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}],
             }
 
-        # b) sinon on répond directement depuis la FAQ (et si GEN présent => filtre le bloc)
-        raw_answer = row.get("answer", "") or ""
-        final_answer = _extract_gen_block(raw_answer, gen) if ask_gen_flag and gen else raw_answer
-
-        extra_line = ""
-        if row.get("video_url"):
-            extra_line = "\n\nBekijk video: " + str(row["video_url"])
+        # réponse directe standard
+        extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
         citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
-        return {"answer": final_answer + extra_line, "citations": citations}
+        return {"answer": row.get("answer", "") + extra_line, "citations": citations}
 
-    # 3) Récupération RAG (filtrée si gen détectée)
+    # 3) si pas de ligne FAQ trouvée -> RAG
+    extra_gen = _parse_extra_gen(req.extra)
+    try:
+        gen = extra_gen or detect_gen(q)
+    except Exception:
+        gen = extra_gen
+
     try:
         docs = retrieve(q, gen_filter=gen)
     except TypeError:
         docs = retrieve(q)
 
-    # 4) Si l’Excel marque des générations et que l’utilisateur n’a pas précisé -> demander GEN
     try:
         found: Set[str] = extract_found_gens(docs)
-    except NameError:
+    except Exception:
         found = set()
 
     if not gen and found:
@@ -320,13 +265,11 @@ def chat(req: ChatRequest):
             "citations": [],
         }
 
-    # 5) Réponse RAG (ou fallback si rien)
     if not docs:
         return {
             "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
             "citations": [],
         }
 
-    # >>> IMPORTANT : passer le GEN à generate_answer pour découper 'Gen X:' <<<
-    answer, citations = generate_answer(q, docs, chosen_gen=gen)
+    answer, citations = generate_answer(q, docs)
     return {"answer": answer, "citations": citations}
