@@ -1,6 +1,7 @@
 # app/ingest.py
 import os
 import json
+import re
 import unicodedata
 from typing import List, Tuple, Any
 
@@ -23,7 +24,12 @@ from .config import (
     STORE_DIR,
 )
 
-# ---------- Loaders texte classiques ----------
+# --------------------------- regex GEN ---------------------------
+_GEN_WORD = re.compile(r"\bgen\s*[123]?\b", re.IGNORECASE)
+_GEN1_RX  = re.compile(r"^\s*gen\s*1\s*[:\-–]?\s*(.*)$", re.IGNORECASE)
+_GEN2_RX  = re.compile(r"^\s*gen\s*2\s*[:\-–]?\s*(.*)$", re.IGNORECASE)
+
+# ---------------------- Loaders texte ----------------------------
 def _load_pdf_pages(path: str) -> List[Tuple[str, int]]:
     out: List[Tuple[str, int]] = []
     try:
@@ -52,14 +58,14 @@ def _load_html(path: str) -> str:
 def _load_txt(path: str) -> str:
     return open(path, "r", encoding="utf-8", errors="ignore").read()
 
-# ---------- Splitter ----------
+# ------------------------- Splitter ------------------------------
 splitter = RecursiveCharacterTextSplitter(
     chunk_size=MAX_CHUNK_TOKENS,
     chunk_overlap=CHUNK_OVERLAP_TOKENS,
     separators=["\n\n", "\n", ". ", " "],
 )
 
-# ---------- Vector store ----------
+# ---------------------- Vector store ----------------------------
 def _get_vs() -> Chroma:
     return Chroma(
         persist_directory=CHROMA_DIR,
@@ -67,7 +73,43 @@ def _get_vs() -> Chroma:
         embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
     )
 
-# ---------- Ingestion dossier (txt/pdf/docx/html) ----------
+# ---------------------- Helpers Excel ---------------------------
+def _norm_name(s: Any) -> str:
+    """normalise noms de colonnes: lower + sans accents + espaces compressés"""
+    s = str(s).replace("\u00a0", " ")
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = " ".join(s.split())
+    return s.strip().lower()
+
+def _col_lookup(df: pd.DataFrame, *aliases) -> str:
+    low = {_norm_name(c): c for c in df.columns}
+    for a in aliases:
+        key = _norm_name(a)
+        if key in low:
+            return low[key]
+    return ""
+
+def _boolish(v: Any) -> bool:
+    if v is None:
+        return False
+    s = str(v).strip().lower()
+    return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
+
+def _extract_followup_question(answer_text: str) -> str:
+    """
+    retourne la première petite ligne finissant par '?'
+    (typiquement 'Is je Wifi apparaat een type Gen 1 of Gen 2?')
+    """
+    if not answer_text:
+        return ""
+    for line in answer_text.strip().splitlines()[:3]:
+        s = line.strip()
+        if s.endswith("?") and 3 <= len(s) <= 200:
+            return s
+    return ""
+
+# ---------------------- Ingestion dossier -----------------------
 def ingest_folder(root: str, source_type: str = "mixed"):
     texts, metas = [], []
     file_count = 0
@@ -122,44 +164,18 @@ def ingest_folder(root: str, source_type: str = "mixed"):
     vs.persist()
     return {"indexed_files": file_count, "indexed_chunks": len(texts)}
 
-# ---------- Helpers ----------
-def _norm_name(s: Any) -> str:
-    """Normalise un nom de colonne: lower, trim, retire accents & espaces insécables, compresse espaces."""
-    s = str(s).replace("\u00a0", " ")  # NBSP -> espace normal
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = " ".join(s.split())  # compresse espaces successifs
-    return s.strip().lower()
-
-def _col_lookup(df: pd.DataFrame, *aliases) -> str:
-    """Retourne le nom de colonne réel (case-sensitive) à partir d'aliases insensibles à la casse/espaces/accents."""
-    low = {_norm_name(c): c for c in df.columns}
-    for a in aliases:
-        key = _norm_name(a)
-        if key in low:
-            return low[key]
-    return ""
-
-# ---------- Ingestion Excel (FAQ) ----------
+# ---------------------- Ingestion Excel -------------------------
 def ingest_excel(path: str, source_type: str = "faq"):
     """
-    Lis l'Excel et :
-      - trouve la bonne feuille automatiquement,
-      - écrit store/faq_index.json (lookup direct),
-      - ajoute les lignes dans Chroma (métadonnées scalaires).
-    Colonnes attendues (variantes acceptées) :
-      * 'Categorie'
-      * 'Vraag' / 'Question'
-      * 'Antwoord' / 'Answer'
-      * 'Foto' (optionnel)
-      * 'Filmpje' / 'Video' / 'Video_URL' (optionnel)
-      * 'Gen 1' / 'Gen1' ; 'Gen 2' / 'Gen2' ; 'Gen 3' / 'Gen3'
-      * autres colonnes cochées 'x' => tags
+    Lit l'Excel et :
+      - choisit la première feuille contenant 'Vraag' & 'Antwoord'
+      - écrit store/faq_index.json (lookup direct)
+      - envoie les lignes dans Chroma (métadonnées scalaires)
+      + extrait les réponses spécifiques Gen 1 / Gen 2 situées juste en dessous
     """
     if not os.path.exists(path):
         return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
 
-    # Ouvre le classeur et essaie chaque feuille jusqu’à trouver Q/A
     xls = pd.ExcelFile(path, engine="openpyxl")
     chosen_df, chosen_sheet = None, None
     for sheet in xls.sheet_names:
@@ -169,26 +185,29 @@ def ingest_excel(path: str, source_type: str = "faq"):
         if c_q_try and c_a_try:
             chosen_df, chosen_sheet = df_try, sheet
             break
-
     if chosen_df is None:
-        # aucune feuille n’a les colonnes Q/A détectables
         return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
 
     df = chosen_df
 
-    c_q    = _col_lookup(df, "Vraag", "Question", "Vragen")
-    c_a    = _col_lookup(df, "Antwoord", "Answer")
-    c_cat  = _col_lookup(df, "Categorie", "Category")
-    c_photo= _col_lookup(df, "Foto", "Photo")
-    c_video= _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
+    # Colonnes
+    c_q     = _col_lookup(df, "Vraag", "Question", "Vragen")
+    c_a     = _col_lookup(df, "Antwoord", "Answer")
+    c_cat   = _col_lookup(df, "Categorie", "Category")
+    c_photo = _col_lookup(df, "Foto", "Photo")
+    c_video = _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
 
-    # Colonnes Gen (toutes celles dont le nom normalisé contient 'gen')
+    # Colonnes GEN cochées
     gen_cols_real = [c for c in df.columns if "gen" in _norm_name(c)]
 
-    texts, metas = [], []
-    index_rows = []
+    texts: List[str] = []
+    metas: List[dict] = []
+    index_rows: List[dict] = []
 
-    for _, row in df.iterrows():
+    # Boucle par index (permet look-ahead)
+    for ridx in range(len(df)):
+        row = df.iloc[ridx]
+
         vraag = str(row.get(c_q, "")).strip()
         antw  = str(row.get(c_a, "")).strip()
         if not vraag or not antw:
@@ -198,11 +217,10 @@ def ingest_excel(path: str, source_type: str = "faq"):
         photo    = str(row.get(c_photo, "")).strip() if c_photo else ""
         video    = str(row.get(c_video, "")).strip() if c_video else ""
 
-        # Gens (liste)
+        # Gens cochés
         gens_list: List[str] = []
         for gc in gen_cols_real:
-            val = row.get(gc)
-            if _boolish(val):
+            if _boolish(row.get(gc)):
                 l = _norm_name(gc)
                 if "gen 1" in l or l == "gen1":
                     gens_list.append("gen1")
@@ -211,52 +229,67 @@ def ingest_excel(path: str, source_type: str = "faq"):
                 elif "gen 3" in l or l == "gen3":
                     gens_list.append("gen3")
 
-        # Tags (liste) = colonnes cochées 'x' hors bases & hors gen*
-        base_cols = {c_q, c_a, c_cat, c_photo, c_video}
-        tags_list: List[str] = []
-        for col in df.columns:
-            cname = str(col)
-            if cname in base_cols:
-                continue
-            if "gen" in _norm_name(cname):
-                continue
-            v = row.get(col)
-            if _boolish(v):
-                tags_list.append(cname)
+        # Sous-question & besoin de GEN
+        followup_q = _extract_followup_question(antw)
+        mentions_gen = bool(_GEN_WORD.search(followup_q))
+        ask_gen = bool(mentions_gen or len(gens_list) > 0)
 
-        # ---- Texte pour Chroma
+        # Chercher réponses Gen1/Gen2 dans les lignes qui suivent (même colonne 'Antwoord')
+        ans_g1, ans_g2 = "", ""
+        if ask_gen:
+            max_j = min(ridx + 6, len(df))  # on scanne jusqu'à 5 lignes en dessous
+            for j in range(ridx + 1, max_j):
+                next_q = str(df.iloc[j].get(c_q, "")).strip() if c_q else ""
+                if next_q:  # on stoppe à la prochaine vraie question
+                    break
+                nxt_a = str(df.iloc[j].get(c_a, "")).strip()
+                if not nxt_a:
+                    continue
+                m1 = _GEN1_RX.match(nxt_a)
+                m2 = _GEN2_RX.match(nxt_a)
+                if m1 and not ans_g1:
+                    ans_g1 = (m1.group(1).strip() or nxt_a)
+                elif m2 and not ans_g2:
+                    ans_g2 = (m2.group(1).strip() or nxt_a)
+
+        # Texte indexé (on ajoute les variantes si trouvées)
         text = f"Vraag: {vraag}\nAntwoord: {antw}"
+        if ans_g1:
+            text += f"\n\nAntwoord (Gen1): {ans_g1}"
+        if ans_g2:
+            text += f"\n\nAntwoord (Gen2): {ans_g2}"
 
-        # ---- Métadonnées scalaires (CSV) pour Chroma
-        # ---- Métadonnées scalaires (CSV) pour Chroma
         gens_csv = ",".join(gens_list) if gens_list else ""
-        tags_csv = ",".join(tags_list) if tags_list else ""
-
         title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
+
         metas.append({
             "source": path,
             "title": title,
             "source_type": source_type,
             "categorie": category or "",
-            "gens": gens_csv,           # CSV
+            "gens": gens_csv,
             "video_url": video or "",
             "photo": photo or "",
-            "tags": tags_csv,           # CSV
+            "tags": "",                  # on garde simple côté vecteur
             "sheet": chosen_sheet or "",
+            "ask_gen": bool(ask_gen),
+            "followup_q": followup_q or "",
         })
         texts.append(text)
 
-
-
-        # ---- Index JSON (on garde les LISTES)
+        # Index JSON (utilisé par /chat)
         index_rows.append({
             "question": vraag,
             "answer": antw,
+            "answer_gen1": ans_g1 or None,
+            "answer_gen2": ans_g2 or None,
             "category": category,
             "gens": gens_list,
             "video_url": video or None,
             "photo": photo or None,
-            "tags": tags_list,
+            "tags": [],
+            "ask_gen": bool(ask_gen),
+            "followup_q": followup_q or None,
             "source": path,
             "sheet": chosen_sheet,
         })
@@ -273,9 +306,14 @@ def ingest_excel(path: str, source_type: str = "faq"):
     vs.add_texts(texts=texts, metadatas=metas)
     vs.persist()
 
-    return {"indexed_files": 1, "indexed_chunks": len(texts), "sheet_used": chosen_sheet, "wrote_index": index_path}
+    return {
+        "indexed_files": 1,
+        "indexed_chunks": len(texts),
+        "sheet_used": chosen_sheet,
+        "wrote_index": index_path,
+    }
 
-# ---------- Ingestion universelle (fichier ou dossier) ----------
+# ---------------- Ingestion universelle (fichier) -----------------
 def ingest_path(path: str, source_type: str = "mixed"):
     if not path:
         return {"indexed_files": 0, "indexed_chunks": 0}
@@ -319,9 +357,3 @@ def ingest_path(path: str, source_type: str = "mixed"):
     vs.add_texts(texts=texts, metadatas=metas)
     vs.persist()
     return {"indexed_files": 1, "indexed_chunks": len(texts)}
-
-def _boolish(v: Any) -> bool:
-    if v is None:
-        return False
-    s = str(v).strip().lower()
-    return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
