@@ -1,5 +1,6 @@
 # app/ingest.py
 import os
+import json
 from typing import List, Tuple
 
 import pandas as pd
@@ -18,6 +19,7 @@ from .config import (
     MAX_CHUNK_TOKENS,
     CHUNK_OVERLAP_TOKENS,
     COLLECTION_NAME,
+    STORE_DIR,                # <— new: pour écrire faq_index.json
 )
 
 # ---------- Loaders texte classiques ----------
@@ -131,66 +133,154 @@ def ingest_folder(root: str, source_type: str = "mixed"):
     vs.persist()
     return {"indexed_files": file_count, "indexed_chunks": len(texts)}
 
-# ---------- Ingestion Excel (FAQ) ----------
+# ---------- Helpers ----------
 def _boolish(v) -> bool:
     if v is None:
         return False
     s = str(v).strip().lower()
     return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
 
+def _col_lookup(df: pd.DataFrame, *aliases) -> str:
+    """
+    Retourne le nom de colonne réel (case-sensitive) à partir d'aliases insensibles à la casse.
+    """
+    low = {c.lower(): c for c in df.columns}
+    for a in aliases:
+        if a and a.lower() in low:
+            return low[a.lower()]
+    return ""
+
+# ---------- Ingestion Excel (FAQ) ----------
 def ingest_excel(path: str, source_type: str = "faq"):
+    """
+    Lit un Excel de FAQ et :
+      - écrit un index JSON (store/faq_index.json) pour lookup direct
+      - envoie chaque ligne (question/réponse) dans Chroma avec métadonnées riches
+    Colonnes tolérées (insensible à la casse):
+      * 'Categorie' (optionnel)
+      * 'Vraag' (obligatoire)
+      * 'Antwoord' (obligatoire)
+      * 'Foto' (optionnel)
+      * 'Filmpje' / 'Video' / 'Video_URL' (optionnel)
+      * 'AskGen' (optionnel) -> True/False/'x'
+      * 'Gen1', 'Gen 1', 'Gen2', 'Gen 2', 'Gen3' ... (optionnels)
+      * Toutes les autres colonnes cochées 'x' seront mises dans 'tags'
+    """
     if not os.path.exists(path):
-        return {"indexed_files": 0, "indexed_chunks": 0}
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
 
-    # lit la feuille par défaut
-    df = pd.read_excel(path, engine="openpyxl")
+    df = pd.read_excel(path, engine="openpyxl").fillna("")
 
-    # normalise les noms de colonnes (insensible à la casse)
-    cols = {c.lower(): c for c in df.columns}
-    if "vraag" not in cols or "antwoord" not in cols:
-        # colonnes obligatoires manquantes
-        return {"indexed_files": 0, "indexed_chunks": 0}
+    # Colonnes de base
+    c_q = _col_lookup(df, "Vraag", "Question", "Vragen")
+    c_a = _col_lookup(df, "Antwoord", "Answer")
+    if not c_q or not c_a:
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
 
-    c_vraag = cols["vraag"]
-    c_antwoord = cols["antwoord"]
-    c_cat = cols.get("categorie")
-    c_gen1 = cols.get("gen1")
-    c_gen2 = cols.get("gen2")
-    c_gen3 = cols.get("gen3")
+    c_cat   = _col_lookup(df, "Categorie", "Category")
+    c_photo = _col_lookup(df, "Foto", "Photo")
+    c_video = _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
 
+    # Générations (toutes colonnes contenant "gen")
+    gen_cols_real = [c for c in df.columns if "gen" in c.lower()]
+    # AskGen explicite optionnelle
+    c_askgen = _col_lookup(df, "AskGen", "Ask Gen", "Ask_Gen")
+
+    # Construction des données
     texts, metas = [], []
+    index_rows = []
+
     for _, row in df.iterrows():
-        vraag = str(row.get(c_vraag, "") or "").strip()
-        antw  = str(row.get(c_antwoord, "") or "").strip()
+        vraag = str(row.get(c_q, "")).strip()
+        antw  = str(row.get(c_a, "")).strip()
         if not vraag or not antw:
             continue
 
-        # 1 chunk par ligne FAQ (souvent suffisant)
-        text = f"Vraag: {vraag}\nAntwoord: {antw}"
+        category = str(row.get(c_cat, "")).strip() if c_cat else ""
+        photo    = str(row.get(c_photo, "")).strip() if c_photo else ""
+        video    = str(row.get(c_video, "")).strip() if c_video else ""
 
+        # Gens = toutes les colonnes "gen*" cochées
         gens = []
-        if c_gen1 and _boolish(row.get(c_gen1)): gens.append("gen1")
-        if c_gen2 and _boolish(row.get(c_gen2)): gens.append("gen2")
-        if c_gen3 and _boolish(row.get(c_gen3)): gens.append("gen3")
+        for gc in gen_cols_real:
+            val = row.get(gc)
+            if _boolish(val):
+                l = gc.strip().lower()
+                if "gen 1" in l or "gen1" in l: gens.append("gen1")
+                elif "gen 2" in l or "gen2" in l: gens.append("gen2")
+                elif "gen 3" in l or "gen3" in l: gens.append("gen3")
 
+        # AskGen: si colonne askgen ou si au moins une colonne GEN cochée
+        ask_gen = False
+        if c_askgen:
+            ask_gen = _boolish(row.get(c_askgen))
+        elif gens:
+            # Ton souhait : "si y'a une croix sur GEN1/GEN2... on POSE la question"
+            ask_gen = True
+
+        # Tags génériques : toutes les colonnes cochées 'x' (hors bases)
+        base_cols = {c_q, c_a, c_cat, c_photo, c_video, c_askgen}
+        tags = []
+        for col in df.columns:
+            cname = str(col)
+            if cname in base_cols:
+                continue
+            # on ignore les colonnes Gen spécifiques (déjà traitées)
+            if "gen" in cname.lower():
+                continue
+            v = row.get(col)
+            if _boolish(v):
+                tags.append(cname)
+
+        # Texte pour Chroma
+        text = f"Vraag: {vraag}\nAntwoord: {antw}"
         title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
         meta = {
             "source": path,
             "title": title,
             "source_type": source_type,
-            "categorie": (str(row.get(c_cat)).strip() if c_cat else None),
+            "categorie": category or None,
             "gens": gens or None,
+            "ask_gen": bool(ask_gen),
+            "video_url": video or None,
+            "photo": photo or None,
+            "tags": tags or None,
         }
         texts.append(text)
         metas.append(meta)
 
-    if not texts:
-        return {"indexed_files": 0, "indexed_chunks": 0}
+        # Ligne d’index JSON (lookup FAQ direct côté /chat)
+        index_rows.append({
+            "question": vraag,
+            "answer": antw,
+            "category": category,
+            "gens": gens,
+            "ask_gen": bool(ask_gen),
+            "video_url": video or None,
+            "photo": photo or None,
+            "tags": tags,
+            "source": path,
+        })
 
+    if not texts:
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
+
+    # Écrire l'index JSON pour le lookup direct
+    os.makedirs(STORE_DIR, exist_ok=True)
+    index_path = os.path.join(STORE_DIR, "faq_index.json")
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index_rows, f, ensure_ascii=False, indent=2)
+
+    # Pousser dans Chroma
     vs = _get_vs()
     vs.add_texts(texts=texts, metadatas=metas)
     vs.persist()
-    return {"indexed_files": 1, "indexed_chunks": len(texts)}
+
+    return {
+        "indexed_files": 1,
+        "indexed_chunks": len(texts),
+        "wrote_index": index_path,
+    }
 
 # ---------- Ingestion universelle (fichier ou dossier) ----------
 def ingest_path(path: str, source_type: str = "mixed"):
