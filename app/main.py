@@ -1,17 +1,21 @@
 # app/main.py
 from typing import List, Optional, Dict, Any, Set
+import os
+import traceback
+import unicodedata
 
+import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .rag import (
     retrieve,
     generate_answer,
-    # Les deux suivants sont optionnels : ne les importe que si tu les as
-    # ajoutés dans ton rag.py. Sinon, supprime-les ici et dans /chat plus bas.
-    detect_gen,          # -> "gen1" / "gen2" / "gen3" ou None d'après la question
-    extract_found_gens,  # -> set({"gen1","gen2"}) trouvé dans les metadata
+    # Optionnels : s'ils n'existent pas dans rag.py, commente ces imports et l'usage plus bas
+    detect_gen,          # -> "gen1"/"gen2"/"gen3" ou None
+    extract_found_gens,  # -> set({"gen1","gen2"}) détecté dans les metadata
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
@@ -20,13 +24,13 @@ from .config import CORRECTION_THRESHOLD
 app = FastAPI(title="Chatbot Piscines API")
 
 # ---------------------------------------------------------------------
-# CORS (mets ici tes domaines de prod)
+# CORS
 # ---------------------------------------------------------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
-    # ajoute ton domaine Railway si tu appelles directement l'API depuis WP
-    # "https://web-production-XXXX.up.railway.app",
+    # ajoute ton domaine Railway si tu appelles l’API direct depuis WP :
+    # "https://web-production-e8b3b.up.railway.app",
 ]
 
 app.add_middleware(
@@ -51,8 +55,7 @@ class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
     debug: bool = False
-    # Permet au front d'envoyer la génération choisie (ex: {"gen":"gen1"})
-    extra: Optional[Dict[str, Any]] = None
+    extra: Optional[Dict[str, Any]] = None   # ex: {"gen":"gen1"}
 
 class IngestRequest(BaseModel):
     path: str
@@ -71,12 +74,20 @@ class FeedbackIn(BaseModel):
     notes: Optional[str] = None
     user: Optional[str] = None
 
-# Aide NL pour reconnaître Gen1/Gen2 (affichable côté front si besoin)
+# Aide NL pour reconnaître Gen1/Gen2 (pour le front si besoin)
 GEN_TIPS_NL = [
     "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
     "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, en bij een Gen 2 toestel maar 1 module.",
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
+
+# ---------------------------------------------------------------------
+# Utils (pour /debug/peek_excel)
+# ---------------------------------------------------------------------
+def _norm_col(s: Any) -> str:
+    """Normalise une étiquette de colonne pour le debug (minuscules, sans accents, alnum)."""
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+    return "".join(ch for ch in s.lower() if ch.isalnum())
 
 # ---------------------------------------------------------------------
 # Routes
@@ -85,10 +96,38 @@ GEN_TIPS_NL = [
 def health():
     return {"status": "ok"}
 
+# ---- INGEST avec try/except pour renvoyer l’erreur au client
 @app.post("/ingest")
 def ingest(req: IngestRequest):
-    # Supporte dossiers, fichiers texte ET Excel (.xlsx/.xls)
-    return ingest_path(req.path, req.source_type)
+    try:
+        result = ingest_path(req.path, req.source_type)
+        return result
+    except Exception as e:
+        tb = traceback.format_exc()
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(e), "trace": tb}
+        )
+
+# ---- Petit endpoint de debug pour vérifier l’Excel
+@app.get("/debug/peek_excel")
+def peek_excel(path: str):
+    if not os.path.exists(path):
+        return {"exists": False, "path": path}
+    try:
+        df = pd.read_excel(path, engine="openpyxl")
+        cols = list(df.columns)
+        return {
+            "exists": True,
+            "path": path,
+            "n_rows": int(len(df)),
+            "columns": cols,
+            "normalized": [_norm_col(c) for c in cols],
+            "head2": df.head(2).fillna("").to_dict(orient="records"),
+        }
+    except Exception as e:
+        tb = traceback.format_exc()
+        return {"exists": True, "path": path, "error": str(e), "trace": tb}
 
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
@@ -108,7 +147,7 @@ def chat(req: ChatRequest):
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 2) Déterminer la génération (si fournie par le front ou mentionnée dans la question)
+    # 2) Déterminer la génération (si fournie par le front ou mentionnée)
     extra_gen = None
     if isinstance(req.extra, dict):
         extra_gen = req.extra.get("gen")
@@ -123,18 +162,17 @@ def chat(req: ChatRequest):
             else:
                 extra_gen = None
     try:
-        gen = extra_gen or detect_gen(q)  # si detect_gen n'existe pas, supprime cette ligne et passe gen=None
+        gen = extra_gen or detect_gen(q)  # si detect_gen n'existe pas, commente cette ligne
     except NameError:
         gen = extra_gen
 
-    # 3) Récupération (filtrée par gen si dispo)
+    # 3) Récupération (filtrée par gen si possible)
     try:
-        docs = retrieve(q, gen_filter=gen)  # si ta signature est retrieve(question) uniquement, retire gen_filter
+        docs = retrieve(q, gen_filter=gen)  # si retrieve() n'a pas gen_filter, on fallback dessous
     except TypeError:
-        # fallback si retrieve ne prend pas gen_filter
         docs = retrieve(q)
 
-    # 4) Si l’Excel marque des générations et que l’utilisateur n’a pas précisé -> demander d’abord GEN
+    # 4) Si l’Excel marque des générations et que l’utilisateur n’a pas précisé -> demander GEN
     try:
         found: Set[str] = extract_found_gens(docs)
     except NameError:
@@ -144,11 +182,7 @@ def chat(req: ChatRequest):
         options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
         return {
             "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
-            "clarify": {
-                "param": "gen",
-                "options": options,
-                "tips": GEN_TIPS_NL,
-            },
+            "clarify": {"param": "gen", "options": options, "tips": GEN_TIPS_NL},
             "citations": [],
             "used_chunks": [] if req.debug else None,
         }
