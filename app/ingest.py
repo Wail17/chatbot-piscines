@@ -1,18 +1,15 @@
 # app/ingest.py
 import os
-import re
 import json
+import re
 import unicodedata
-from typing import List, Tuple, Any, Dict
+from typing import List, Tuple, Any, Dict, Optional
 
 import pandas as pd
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from docx import Document as DocxDocument
 from pypdf import PdfReader
-
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
@@ -71,73 +68,78 @@ def _get_vs() -> Chroma:
         embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
     )
 
-# ---------- Utils ----------
-def _norm(s: Any) -> str:
-    """Normalise (lower, sans accents, espaces compressés, NBSP=>espace)."""
-    s = str(s or "").replace("\u00a0", " ")
+# ---------- Helpers ----------
+def _norm_name(s: Any) -> str:
+    """Normalise un nom de colonne: lower, trim, retire accents & NBSP, compresse espaces."""
+    s = str(s).replace("\u00a0", " ")  # NBSP -> espace normal
     s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = re.sub(r"\s+", " ", s)
+    s = " ".join(s.split())
     return s.strip().lower()
 
 def _col_lookup(df: pd.DataFrame, *aliases) -> str:
-    low = {_norm(c): c for c in df.columns}
+    """Retourne le nom de colonne réel (case-sensitive) à partir d'aliases tolérants."""
+    low = {_norm_name(c): c for c in df.columns}
     for a in aliases:
-        na = _norm(a)
-        if na in low:
-            return low[na]
+        key = _norm_name(a)
+        if key in low:
+            return low[key]
     return ""
 
 def _boolish(v: Any) -> bool:
     if v is None:
         return False
-    s = _norm(v)
+    s = str(v).strip().lower()
     return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
 
-# -- détection surlignage (Antwoord)
-def _highlight_mask_for_answer(path: str, sheet_name: str | None, answer_col_letter: str) -> set[int]:
-    wb = load_workbook(path, data_only=True)
-    ws = wb[sheet_name] if (sheet_name and sheet_name in wb.sheetnames) else wb.active
-    hi = set()
-    col_idx = ord(answer_col_letter.upper()) - ord("A")  # 0-based
-    for i, row in enumerate(ws.iter_rows(min_row=2), start=0):  # 0-based côté pandas (en excluant header)
-        cell = row[col_idx]
-        fill = cell.fill
-        rgb = getattr(getattr(fill, "start_color", None), "rgb", None)
-        if fill and fill.fill_type and rgb and rgb not in ("00000000", "FFFFFFFF"):
-            hi.add(i)
-    return hi
-
-# -- parsing des options "Gen 1:", "Gen 2:", "Wifipool:", "Benisol:" etc.
-_LABEL_RX = re.compile(r"^\s*(gen\s*[123]|wifi\s*pool|wifipool|benisol)\s*[:\-]\s*(.*)$", re.IGNORECASE)
-
-def _norm_label(label: str) -> str | None:
-    t = _norm(label)
-    if t.startswith("gen 1") or t.startswith("gen1"):
-        return "gen1"
-    if t.startswith("gen 2") or t.startswith("gen2"):
-        return "gen2"
-    if t.startswith("gen 3") or t.startswith("gen3"):
-        return "gen3"
-    if t.startswith("wifipool") or t.startswith("wifi pool"):
-        return "wifipool"
-    if t.startswith("benisol"):
-        return "benisol"
-    return None
-
-def _split_options_block(s: str) -> tuple[str | None, str]:
+def _first_question_line(text: str) -> Tuple[Optional[str], str]:
     """
-    Si s commence par 'Gen 1:' / 'Wifipool:' etc., renvoie (clé normalisée, contenu_sans_entête).
-    Sinon (None, s).
+    Si la première ligne se termine par un '?', on la considère comme la sous-question
+    (question jaune). Retourne (followup_q, reste_du_texte).
     """
-    if not s:
-        return None, s
-    m = _LABEL_RX.match(s)
-    if not m:
-        return None, s
-    key = _norm_label(m.group(1))
-    rest = m.group(2).strip()
-    return key, rest
+    if not text:
+        return None, ""
+    lines = text.splitlines()
+    if not lines:
+        return None, ""
+    head = lines[0].strip()
+    if head.endswith("?"):
+        return head, "\n".join(lines[1:]).strip()
+    return None, text.strip()
+
+def _extract_choice_blocks(rest: str) -> Tuple[Optional[str], List[str], Dict[str, str]]:
+    """
+    Détecte des couples 'Wifipool : ... / Benisol : ...' OU 'Gen 1 : ... / Gen 2 : ...'
+    dans le texte (rest). Retourne (choice_param, choice_options, choice_map)
+      - choice_param ∈ {"device", "gen"} ou None
+      - choice_options, p.ex. ["wifipool","benisol"] ou ["gen1","gen2"]
+      - choice_map dict option -> bloc texte
+    """
+    if not rest:
+        return None, [], {}
+
+    # On travaille en multiline/dotall pour capturer les blocs jusqu'au prochain label ou fin.
+    def _grab(label_a: str, label_b: str, norm_keys: Tuple[str, str], param: str):
+        pa = re.compile(rf"(?is)\b{label_a}\s*:\s*(.*?)(?=\b{label_b}\s*:|$)")
+        pb = re.compile(rf"(?is)\b{label_b}\s*:\s*(.*)")
+        m1 = pa.search(rest)
+        m2 = pb.search(rest)
+        if m1 and m2:
+            k1, k2 = norm_keys
+            return param, [k1, k2], {k1: m1.group(1).strip(), k2: m2.group(1).strip()}
+        return None, [], {}
+
+    # 1) Wifipool / Benisol
+    param, opts, m = _grab(r"wifipool", r"benisol", ("wifipool", "benisol"), "device")
+    if param:
+        return param, opts, m
+
+    # 2) Gen 1 / Gen 2 (on accepte variations d'espace)
+    param, opts, m = _grab(r"gen\s*1", r"gen\s*2", ("gen1", "gen2"), "gen")
+    if param:
+        return param, opts, m
+
+    return None, [], {}
 
 # ---------- Ingestion dossier (txt/pdf/docx/html) ----------
 def ingest_folder(root: str, source_type: str = "mixed"):
@@ -181,7 +183,9 @@ def ingest_folder(root: str, source_type: str = "mixed"):
 
             chunks = [c for c in splitter.split_text(text) if c.strip()]
             texts.extend(chunks)
-            metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
+            metas.extend(
+                [{"source": path, "title": title, "source_type": source_type}] * len(chunks)
+            )
             file_count += 1
 
     if not texts:
@@ -195,15 +199,22 @@ def ingest_folder(root: str, source_type: str = "mixed"):
 # ---------- Ingestion Excel (FAQ) ----------
 def ingest_excel(path: str, source_type: str = "faq"):
     """
-    Lit un Excel de FAQ. Pose une sous-question seulement quand la cellule Antwoord
-    de la ligne est surlignée (jaune) ET/OU quand on détecte des options
-    (Gen1/Gen2, Wifipool/Benisol…) dans les lignes suivantes.
-    Les options suivantes (où la colonne 'Vraag' est vide) sont rattachées à la
-    question jaune.
+    Lit l'Excel et :
+      - choisit la feuille contenant 'Vraag'/'Antwoord',
+      - écrit store/faq_index.json,
+      - envoie les lignes dans Chroma (métadonnées scalaires).
+    Colonnes acceptées :
+      * 'Categorie'
+      * 'Vraag' / 'Question'
+      * 'Antwoord' / 'Answer'
+      * 'Foto'
+      * 'Filmpje' / 'Video' / 'Video_URL'
+      * 'Gen 1' / 'Gen1' / 'Gen 2' / 'Gen2' / 'Gen 3' / 'Gen3' (cochés éventuellement -> tags)
     """
     if not os.path.exists(path):
         return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
 
+    # 1) Choix de la feuille
     xls = pd.ExcelFile(path, engine="openpyxl")
     chosen_df, chosen_sheet = None, None
     for sheet in xls.sheet_names:
@@ -219,114 +230,104 @@ def ingest_excel(path: str, source_type: str = "faq"):
 
     df = chosen_df
 
-    # Colonnes
-    c_q    = _col_lookup(df, "Vraag", "Question", "Vragen")
-    c_a    = _col_lookup(df, "Antwoord", "Answer")
-    c_cat  = _col_lookup(df, "Categorie", "Category")
-    c_photo= _col_lookup(df, "Foto", "Photo")
-    c_video= _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
+    # 2) Résolution colonnes
+    c_q     = _col_lookup(df, "Vraag", "Question", "Vragen")
+    c_a     = _col_lookup(df, "Antwoord", "Answer")
+    c_cat   = _col_lookup(df, "Categorie", "Category")
+    c_photo = _col_lookup(df, "Foto", "Photo")
+    c_video = _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
 
-    # masque surlignage pour 'Antwoord'
-    try:
-        a_pos = list(df.columns).index(c_a)
-        a_letter = get_column_letter(a_pos + 1)
-    except Exception:
-        a_letter = "C"
-    highlighted = _highlight_mask_for_answer(path, chosen_sheet, a_letter)
+    # 3) Colonnes Gen (toutes celles dont le nom normalisé contient 'gen')
+    gen_cols_real = [c for c in df.columns if "gen" in _norm_name(c)]
 
     texts: List[str] = []
-    metas: List[Dict[str, Any]] = []
-    index_rows: List[Dict[str, Any]] = []
+    metas: List[dict] = []
+    index_rows: List[dict] = []
 
-    i = 0
-    n = len(df)
-    while i < n:
-        row = df.iloc[i]
+    # 4) Lignes
+    for _, row in df.iterrows():
         vraag = str(row.get(c_q, "")).strip()
         antw  = str(row.get(c_a, "")).strip()
-
-        if not vraag and not antw:
-            i += 1
+        if not vraag or not antw:
             continue
 
         category = str(row.get(c_cat, "")).strip() if c_cat else ""
         photo    = str(row.get(c_photo, "")).strip() if c_photo else ""
         video    = str(row.get(c_video, "")).strip() if c_video else ""
 
-        # Détection d'un bloc "question jaune" + collecte des options sur les lignes suivantes
-        is_highlight = (i in highlighted)
-        branches: Dict[str, str] = {}
-        select_param = None  # 'gen' | 'device' | 'choice'
-        options_list: List[str] = []
+        # Gens (liste à partir des colonnes GEN cochées -> tags génériques)
+        gens_list: List[str] = []
+        for gc in gen_cols_real:
+            val = row.get(gc)
+            if _boolish(val):
+                l = _norm_name(gc)
+                if "gen 1" in l or l == "gen1":
+                    gens_list.append("gen1")
+                elif "gen 2" in l or l == "gen2":
+                    gens_list.append("gen2")
+                elif "gen 3" in l or l == "gen3":
+                    gens_list.append("gen3")
 
-        if vraag and antw:
-            # si la réponse (cellule Antwoord) est une *question* jaune => on regarde les lignes suivantes
-            if is_highlight:
-                j = i + 1
-                while j < n:
-                    row_next = df.iloc[j]
-                    # stop dès qu'une nouvelle 'Vraag' réapparait
-                    if str(row_next.get(c_q, "")).strip():
-                        break
-                    ans_next = str(row_next.get(c_a, "")).strip()
-                    if not ans_next:
-                        j += 1
-                        continue
-                    key, content = _split_options_block(ans_next)
-                    if key:
-                        branches[key] = content
-                    j += 1
+        # Tags supplémentaires = colonnes cochées x hors bases & hors gen*
+        base_cols = {c_q, c_a, c_cat, c_photo, c_video}
+        tags_list: List[str] = []
+        for col in df.columns:
+            cname = str(col)
+            if cname in base_cols:
+                continue
+            if "gen" in _norm_name(cname):
+                continue
+            v = row.get(col)
+            if _boolish(v):
+                tags_list.append(cname)
 
-                if branches:
-                    keys = set(branches.keys())
-                    if any(k.startswith("gen") for k in keys):
-                        select_param = "gen"
-                    elif keys <= {"wifipool", "benisol"} or "wifipool" in keys or "benisol" in keys:
-                        select_param = "device"
-                    else:
-                        select_param = "choice"
-                    options_list = sorted(list(keys))
+        # ---- Sous-question et choix (si présents)
+        followup_q, rest = _first_question_line(antw)
+        choice_param, choice_options, choice_map = _extract_choice_blocks(rest)
 
-        # texte pour chroma (on envoie la paire Q/A brute; si c’est une sous-question,
-        # le LLM ne s’en sert pas directement — côté /chat on utilise l’index JSON)
-        if vraag and antw:
-            text = f"Vraag: {vraag}\nAntwoord: {antw}"
-            title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
-            metas.append({
-                "source": path,
-                "title": title,
-                "source_type": source_type,
-                "categorie": category or "",
-                "video_url": video or "",
-                "photo": photo or "",
-                "sheet": chosen_sheet or "",
-            })
-            texts.append(text)
+        # ---- Texte chunk pour Chroma (on garde tout le bloc question/réponse)
+        text = f"Vraag: {vraag}\nAntwoord: {antw}"
 
-            # index JSON enrichi
-            index_row = {
-                "question": vraag,
-                "answer": antw,                # utile si pas de sous-question
-                "category": category,
-                "video_url": video or None,
-                "photo": photo or None,
-                "source": path,
-                "sheet": chosen_sheet,
-                # champs pour sous-question
-                "ask_select": bool(is_highlight and (branches or antw)),  # jaune => on considère sous-question
-                "followup_q": antw if is_highlight else None,
-                "select_param": select_param,
-                "options": options_list,
-                "branches": branches,          # { key -> texte }
-            }
-            index_rows.append(index_row)
+        title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
+        metas.append({
+            "source": path,
+            "title": title,
+            "source_type": source_type,
+            "categorie": category or "",
+            "gens": ",".join(gens_list),
+            "video_url": video or "",
+            "photo": photo or "",
+            "tags": ",".join(tags_list),
+            "sheet": chosen_sheet or "",
+            # champs scalaires informatifs (le détail mapping est dans le JSON)
+            "followup_q": followup_q or "",
+            "choice_param": choice_param or "",
+            "choice_options": ",".join(choice_options) if choice_options else "",
+        })
+        texts.append(text)
 
-        i += 1
+        # ---- Index JSON riche pour le /chat
+        index_rows.append({
+            "question": vraag,
+            "answer": antw,                 # réponse globale (fallback)
+            "category": category,
+            "gens": gens_list,
+            "video_url": video or None,
+            "photo": photo or None,
+            "tags": tags_list,
+            "source": path,
+            "sheet": chosen_sheet,
+            # nouveau : sous-question et mapping d'options
+            "followup_q": followup_q,
+            "choice_param": choice_param,        # "device" ou "gen" (ou None)
+            "choice_options": choice_options,    # ex. ["wifipool","benisol"]
+            "choice_map": choice_map,            # {"wifipool": "...", "benisol": "..."} ou {"gen1": "...", ...}
+        })
 
     if not texts:
         return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
 
-    # Sauvegardes
+    # 5) Sauvegardes
     os.makedirs(STORE_DIR, exist_ok=True)
     index_path = os.path.join(STORE_DIR, "faq_index.json")
     with open(index_path, "w", encoding="utf-8") as f:
