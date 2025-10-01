@@ -1,5 +1,5 @@
 # app/main.py
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 import os, json, re, unicodedata
 from difflib import SequenceMatcher
 
@@ -44,7 +44,7 @@ class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
     debug: bool = False
-    extra: Optional[Dict[str, Any]] = None
+    extra: Optional[Dict[str, Any]] = None  # pour 'gen' ou 'choice'
 
 class IngestRequest(BaseModel):
     path: str
@@ -69,13 +69,16 @@ GEN_TIPS_NL = [
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
-# ---------------------- FAQ index ----------------------
+# ---------------------- FAQ index (JSON) ----------------------
 _FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
-try:
-    with open(_FAQ_PATH, "r", encoding="utf-8") as f:
-        _FAQ: List[dict] = json.load(f)
-except Exception:
-    _FAQ = []
+def _load_faq() -> List[dict]:
+    try:
+        with open(_FAQ_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+_FAQ: List[dict] = _load_faq()
 
 # ---------------------- lookup helpers ----------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
@@ -92,14 +95,10 @@ def _normalize(s: str) -> str:
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
-def _best_faq_match(user_q: str, min_score: float = 0.74) -> dict | None:
-    """
-    Appariement robuste :
-    1) exact / inclusion sur question
-    2) fuzzy question
-    3) inclusion / fuzzy sur réponse
-    Seuils assouplis pour mieux couvrir les variantes.
-    """
+def _best_faq_match(user_q: str, min_score: float = 0.80) -> dict | None:
+    """1) exact/inclusion sur 'question'
+       2) fuzzy sur 'question'
+       3) inclusion/fuzzy sur 'answer' (si réponse directe)"""
     if not _FAQ:
         return None
     uq = _normalize(user_q)
@@ -107,9 +106,7 @@ def _best_faq_match(user_q: str, min_score: float = 0.74) -> dict | None:
     # 1) exact / inclusion sur question
     for row in _FAQ:
         q = _normalize(row.get("question", ""))
-        if not q:
-            continue
-        if uq == q or uq in q or q in uq:
+        if q and (uq == q or uq in q or q in uq):
             return row
 
     # 2) fuzzy sur question
@@ -124,7 +121,7 @@ def _best_faq_match(user_q: str, min_score: float = 0.74) -> dict | None:
     if best[0] >= min_score:
         return best[1]
 
-    # 3) inclusion/fuzzy sur réponse
+    # 3) inclusion/fuzzy sur answer (si direct)
     best = (0.0, None)
     for row in _FAQ:
         a = _normalize(row.get("answer", ""))
@@ -135,10 +132,9 @@ def _best_faq_match(user_q: str, min_score: float = 0.74) -> dict | None:
         sc = _ratio(uq, a)
         if sc > best[0]:
             best = (sc, row)
-    # léger rabais sur le seuil pour la réponse
-    return best[1] if best[0] >= (min_score - 0.06) else None
+    return best[1] if best[0] >= (min_score - 0.08) else None
 
-# --- recherche par mots-clés (quelques synonymes utiles) ---
+# --- petite recherche mots-clés (facultatif) ---
 KW_MAP = {
     "tlf": ["tlf"],
     "thermometer": ["thermometer", "thermometers", "vloeistof thermometer", "vloeistofthermometer"],
@@ -171,7 +167,7 @@ def _faq_keyword_search(user_q: str) -> dict | None:
             best = (hits, row)
     return best[1] if best[0] >= 2 else None
 
-# ---------------------- helpers: extra params ----------------------
+# ---------------------- helpers extra/clarify ----------------------
 def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(extra, dict):
         return None
@@ -181,21 +177,30 @@ def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     if g in {"gen3", "gen 3"}: return "gen3"
     return None
 
-def _parse_extra_choice(extra: Optional[Dict[str, Any]], param: str) -> Optional[str]:
-    """Récupère la valeur d’un paramètre arbitraire (ex: 'device' -> 'wifipool'/'benisol')."""
-    if not isinstance(extra, dict) or not param:
+def _parse_extra_choice(extra: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(extra, dict):
         return None
-    val = str(extra.get(param, "")).strip().lower()
-    return val or None
-
-def _detect_choice_in_text(text: str, options: List[str]) -> Optional[str]:
-    """Tentative simple: si une des options apparaît telle quelle dans la requête."""
-    t = " " + _normalize(text) + " "
-    for opt in options or []:
-        o = " " + _normalize(opt) + " "
-        if o in t:
-            return opt
+    # tolérer plusieurs clés pour la sélection
+    for k in ("choice", "optie", "option", "selectie"):
+        if k in extra and str(extra[k]).strip():
+            return str(extra[k]).strip()
     return None
+
+def _match_option_label(user_val: str, options: Dict[str, dict]) -> Tuple[str, dict] | None:
+    """retourne (label, payload) si on matche la sélection utilisateur sur une des clés d'options"""
+    if not user_val or not options:
+        return None
+    nv = _normalize(user_val)
+    best = (0.0, None)
+    for label, payload in options.items():
+        nl = _normalize(str(label))
+        if nv == nl or nv in nl or nl in nv:
+            return (label, payload)
+        sc = _ratio(nv, nl)
+        if sc > best[0]:
+            best = (sc, (label, payload))
+    # seuil souple
+    return best[1] if best[0] >= 0.78 else None
 
 # ---------------------- Routes ----------------------
 @app.get("/health")
@@ -204,7 +209,7 @@ def health():
 
 @app.get("/debug/faq_lookup")
 def dbg_lookup(q: str):
-    r1 = _best_faq_match(q, min_score=0.74)
+    r1 = _best_faq_match(q)
     r2 = None if r1 else _faq_keyword_search(q)
     return {"q": q, "best_match": bool(r1 or r2), "via": "best" if r1 else ("keywords" if r2 else None), "row": (r1 or r2)}
 
@@ -213,11 +218,7 @@ def ingest(req: IngestRequest):
     res = ingest_path(req.path, req.source_type)
     # recharger l'index si régénéré
     global _FAQ
-    try:
-        with open(_FAQ_PATH, "r", encoding="utf-8") as f:
-            _FAQ = json.load(f)
-    except Exception:
-        pass
+    _FAQ[:] = _load_faq()
     return res
 
 @app.post("/train/correction")
@@ -228,82 +229,76 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
+# ---------------------- Chat ----------------------
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 1) Correction admin prioritaire
+    # 1) corrections admin (prioritaire)
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 2) Lookup FAQ (question -> éventuellement clarification)
-    row = _best_faq_match(q, min_score=0.74) or _faq_keyword_search(q)
+    # 2) lookup FAQ (robuste)
+    row = _best_faq_match(q) or _faq_keyword_search(q)
     if row:
         citations = [{"title": row.get("question") or "FAQ", "source": row.get("source"), "page": None}]
-        video_line = ("\n\nBekijk video: " + str(row["video_url"])) if row.get("video_url") else ""
 
-        # 2.a) Cas spécial GEN (issu d'une cellule jaune)
-        if bool(row.get("ask_gen")):
-            # si déjà fourni (via extra) ou déductible de la question → répondre directement
-            gen_from_req = _parse_extra_gen(req.extra)
-            try:
-                gen_from_text = detect_gen(q)
-            except Exception:
-                gen_from_text = None
-            final_gen = gen_from_req or gen_from_text
+        follow_up = bool(row.get("follow_up"))
+        options: Dict[str, dict] = row.get("options") or {}
 
-            if final_gen == "gen1" and row.get("answer_gen1"):
-                return {"answer": row["answer_gen1"] + video_line, "citations": citations}
-            if final_gen == "gen2" and row.get("answer_gen2"):
-                return {"answer": row["answer_gen2"] + video_line, "citations": citations}
-            if final_gen == "gen3" and row.get("answer_gen3"):
-                return {"answer": row["answer_gen3"] + video_line, "citations": citations}
+        # --- cas "ask_gen" (compat) ---
+        ask_gen_flag = bool(row.get("ask_gen"))
+        if ask_gen_flag:
+            gen_from_req = _parse_extra_gen(req.extra) or (detect_gen(q) if callable(detect_gen) else None)
 
-            # sinon → demander GEN
-            opts = [o for o in ["gen1", "gen2", "gen3"] if row.get(f"answer_{o}")]
-            if not opts:
-                opts = ["gen1", "gen2"]
+            if gen_from_req == "gen1" and row.get("answer_gen1"):
+                return {"answer": row["answer_gen1"], "citations": citations}
+            if gen_from_req == "gen2" and row.get("answer_gen2"):
+                return {"answer": row["answer_gen2"], "citations": citations}
+            if gen_from_req == "gen3" and row.get("answer_gen3"):
+                return {"answer": row["answer_gen3"], "citations": citations}
+
+            # pas de GEN encore fournie -> clarification GEN
             return {
                 "answer": row.get("followup_q") or "Hebt u een Gen 1 of een Gen 2 apparaat?",
-                "clarify": {"param": "gen", "options": opts, "tips": GEN_TIPS_NL},
+                "clarify": {"param": "gen", "options": ["gen1", "gen2", "gen3"], "tips": GEN_TIPS_NL},
                 "citations": citations,
             }
 
-        # 2.b) Clarification GENERIQUE (ex: Wifipool vs Benisol)
-        if bool(row.get("ask_choice")):
-            param = (row.get("choice_param") or "choice").strip()
-            options: List[str] = row.get("choice_options") or []
+        # --- cas "options" génériques ---
+        if follow_up and options:
+            choice = _parse_extra_choice(req.extra)
+            match = _match_option_label(choice, options) if choice else None
+            if match:
+                label, payload = match
+                main = str(payload.get("answer") or payload.get("antwoord") or "").strip()
+                rec = str(payload.get("recommendation") or payload.get("aanbeveling") or "").strip()
+                answer_text = main + (("\n\n" + rec) if rec else "")
+                return {"answer": answer_text, "citations": citations}
 
-            # Essayer de déduire depuis extra ou texte
-            picked = _parse_extra_choice(req.extra, param) or _detect_choice_in_text(q, options)
-            answers_map: Dict[str, str] = row.get("answers") or {}
+            # pas de choix encore -> proposer les options
+            opt_labels = list(options.keys())
+            return {
+                "answer": row.get("followup_q") or "Kies een optie:",
+                "clarify": {"param": "choice", "options": opt_labels},
+                "citations": citations,
+            }
 
-            if picked and picked in answers_map and answers_map[picked]:
-                return {"answer": str(answers_map[picked]) + video_line, "citations": citations}
+        # --- réponse directe ---
+        direct = row.get("answer")
+        if isinstance(direct, str) and direct.strip():
+            return {"answer": direct, "citations": citations}
 
-            # sinon → demander explicitement
-            if options:
-                return {
-                    "answer": row.get("followup_q") or (param.capitalize() + "?"),
-                    "clarify": {"param": param, "options": options},
-                    "citations": citations,
-                }
+        # garde-fou: si rien d'utilisable
+        return {
+            "answer": "Het lijkt erop dat deze vraag extra informatie vereist. Kunt u preciseren wat u precies wilt weten?",
+            "citations": citations,
+        }
 
-        # 2.c) Réponse directe (pas de clarification demandée)
-        if row.get("answer"):
-            return {"answer": row["answer"] + video_line, "citations": citations}
-
-        # garde-fou
-        return {"answer": "(geen antwoord gevonden)", "citations": citations}
-
-    # 3) Fallback RAG si pas de ligne FAQ trouvée
-    try:
-        extra_gen = _parse_extra_gen(req.extra)
-    except Exception:
-        extra_gen = None
-
+    # 3) Fallback RAG
+    extra_gen = _parse_extra_gen(req.extra)
     try:
         gen = extra_gen or detect_gen(q)
     except Exception:
