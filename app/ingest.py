@@ -3,7 +3,7 @@ import os
 import json
 import re
 import unicodedata
-from typing import List, Tuple, Any, Dict
+from typing import List, Tuple, Any
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -70,7 +70,7 @@ def _get_vs() -> Chroma:
 
 # ---------- Helpers ----------
 def _norm_name(s: Any) -> str:
-    """lower + retire accents + NBSP + compresse espaces"""
+    """Normalise un nom de colonne: lower, trim, retire accents & NBSP, compresse espaces."""
     s = str(s).replace("\u00a0", " ")
     s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
@@ -80,10 +80,51 @@ def _norm_name(s: Any) -> str:
 def _col_lookup(df: pd.DataFrame, *aliases) -> str:
     low = {_norm_name(c): c for c in df.columns}
     for a in aliases:
-        k = _norm_name(a)
-        if k in low:
-            return low[k]
+        key = _norm_name(a)
+        if key in low:
+            return low[key]
     return ""
+
+_GEN1_RE = re.compile(r"\bgen\s*1\b", re.IGNORECASE)
+_GEN2_RE = re.compile(r"\bgen\s*2\b", re.IGNORECASE)
+_WIFIPOOL_RE = re.compile(r"\bwifi?pool\b", re.IGNORECASE)
+_BENISOL_RE = re.compile(r"\bbenisol\b", re.IGNORECASE)
+
+def _extract_followup_question(answer_text: str) -> str:
+    """
+    Renvoie la première petite ligne se terminant par '?' (souvent la cellule JAUNE).
+    """
+    if not answer_text:
+        return ""
+    for line in answer_text.splitlines():
+        s = line.strip()
+        if s.endswith("?") and 3 <= len(s) <= 200:
+            return s
+    return ""
+
+def _needs_clarify_and_options(answer_text: str) -> tuple[bool, List[str], str]:
+    """
+    Détecte si on doit poser une question de type choix.
+    Renvoie (ask_gen, options, followup_q)
+      - options: ['gen1','gen2'] OU ['wifipool','benisol']
+    """
+    txt = answer_text or ""
+    has_gen1 = bool(_GEN1_RE.search(txt))
+    has_gen2 = bool(_GEN2_RE.search(txt))
+    has_wifi = bool(_WIFIPOOL_RE.search(txt))
+    has_ben = bool(_BENISOL_RE.search(txt))
+
+    ask = False
+    options: List[str] = []
+    if has_gen1 and has_gen2:
+        ask = True
+        options = ["gen1", "gen2"]
+    elif has_wifi and has_ben:
+        ask = True
+        options = ["wifipool", "benisol"]
+
+    q = _extract_followup_question(txt) if ask else ""
+    return ask, options, q
 
 def _boolish(v: Any) -> bool:
     if v is None:
@@ -91,218 +132,7 @@ def _boolish(v: Any) -> bool:
     s = str(v).strip().lower()
     return s in {"1", "true", "x", "✓", "yes", "ja", "oui"}
 
-# --- Parsing des branches dans le texte d'Antwoord (après regroupement) ---
-BRANCH_PATS = [
-    (re.compile(r"^\s*(wifipool|wifi\s*pool)\s*:\s*(.*)$", re.IGNORECASE), "wifipool"),
-    (re.compile(r"^\s*(benisol)\s*:\s*(.*)$", re.IGNORECASE), "benisol"),
-    (re.compile(r"^\s*gen\s*1\s*:\s*(.*)$", re.IGNORECASE), "gen1"),
-    (re.compile(r"^\s*gen\s*2\s*:\s*(.*)$", re.IGNORECASE), "gen2"),
-    (re.compile(r"^\s*gen\s*3\s*:\s*(.*)$", re.IGNORECASE), "gen3"),
-]
-
-def _extract_branches(full_answer: str) -> Dict[str, str]:
-    """
-    Cherche des en-têtes de type 'Wifipool: ...', 'Benisol: ...', 'Gen 1: ...'
-    et renvoie { 'wifipool': '...', 'benisol': '...' } ou { 'gen1': '...', 'gen2': '...' }.
-    """
-    lines = [l for l in (full_answer or "").splitlines()]
-    branches: Dict[str, List[str]] = {}
-    current_key = None
-
-    def flush():
-        nonlocal current_key
-        if current_key is not None:
-            txt = "\n".join(branches[current_key]).strip()
-            branches[current_key] = [txt] if txt else []
-        current_key = None
-
-    for ln in lines:
-        matched = False
-        for pat, key in BRANCH_PATS:
-            m = pat.match(ln)
-            if m:
-                # nouveau header -> flush précédent
-                if current_key is not None:
-                    flush()
-                current_key = key
-                branches.setdefault(current_key, [])
-                # premier bout de la ligne après "Label:"
-                tail = m.group(1) if key in ("wifipool", "benisol") else m.group(0)
-                # Dans nos regex wifipool/benisol, group(2) contient le début de contenu
-                if key in ("wifipool", "benisol"):
-                    branches[current_key].append(m.group(2).strip())
-                else:
-                    # pour genX, on a capturé tout après 'Gen X:' via la regex correspondante
-                    branches[current_key].append(m.group(1).strip())
-                matched = True
-                break
-        if not matched:
-            if current_key is not None:
-                branches[current_key].append(ln)
-
-    if current_key is not None:
-        flush()
-
-    # Nettoyage final
-    out = {k: "\n".join(v).strip() for k, v in branches.items() if v and "\n".join(v).strip()}
-    return out
-
-def _first_line_question(full_answer: str) -> str:
-    """
-    Si la première ligne du bloc Answer finit par '?', on la prend
-    comme follow-up (question à poser), et on la retirera du contenu indexé.
-    """
-    if not full_answer:
-        return ""
-    lines = [l.strip() for l in full_answer.splitlines() if l.strip()]
-    if not lines:
-        return ""
-    first = lines[0]
-    return first if first.endswith("?") else ""
-
-def _strip_first_line(full_answer: str) -> str:
-    lines = [l for l in (full_answer or "").splitlines()]
-    if not lines:
-        return ""
-    if lines[0].strip().endswith("?"):
-        return "\n".join(lines[1:]).strip()
-    return full_answer.strip()
-
-# ---------- Ingestion Excel (FAQ) ----------
-def ingest_excel(path: str, source_type: str = "faq"):
-    """
-    - Regroupe les lignes 'Antwoord' qui suivent une 'Vraag' (jusqu'à la prochaine Vraag)
-    - Extrait followup_q (si la 1ère ligne de réponse finit par '?')
-    - Extrait des branches (Wifipool/Benisol ou Gen1/Gen2/Gen3) si présentes
-    - Indexe tout (et écrit aussi store/faq_index.json pour lookup direct)
-    """
-    if not os.path.exists(path):
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
-
-    xls = pd.ExcelFile(path, engine="openpyxl")
-    chosen_df, chosen_sheet = None, None
-    for sheet in xls.sheet_names:
-        df_try = xls.parse(sheet).fillna("")
-        c_q_try = _col_lookup(df_try, "Vraag", "Question", "Vragen")
-        c_a_try = _col_lookup(df_try, "Antwoord", "Answer")
-        if c_q_try and c_a_try:
-            chosen_df, chosen_sheet = df_try, sheet
-            break
-    if chosen_df is None:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
-
-    df = chosen_df
-    c_q    = _col_lookup(df, "Vraag", "Question", "Vragen")
-    c_a    = _col_lookup(df, "Antwoord", "Answer")
-    c_cat  = _col_lookup(df, "Categorie", "Category")
-    c_foto = _col_lookup(df, "Foto", "Photo")
-    c_vid  = _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
-
-    n = len(df)
-    texts, metas, index_rows = [], [], []
-
-    i = 0
-    while i < n:
-        vraag = str(df.at[i, c_q]).strip() if c_q else ""
-        if not vraag:
-            i += 1
-            continue
-
-        category = str(df.at[i, c_cat]).strip() if c_cat else ""
-        photo    = str(df.at[i, c_foto]).strip() if c_foto else ""
-        video    = str(df.at[i, c_vid]).strip() if c_vid else ""
-
-        # Regrouper Antwoord de cette ligne + suivantes tant que la colonne Vraag est vide
-        parts = []
-        a0 = str(df.at[i, c_a]).strip() if c_a else ""
-        if a0:
-            parts.append(a0)
-        j = i + 1
-        while j < n:
-            next_q = str(df.at[j, c_q]).strip() if c_q else ""
-            if next_q:  # nouvelle question -> on s'arrête
-                break
-            a_next = str(df.at[j, c_a]).strip() if c_a else ""
-            if a_next:
-                parts.append(a_next)
-            j += 1
-        full_answer = "\n".join(parts).strip()
-
-        # follow-up éventuel (ligne 1 finissant par '?')
-        followup_q = _first_line_question(full_answer)
-        content_for_index = _strip_first_line(full_answer)
-
-        # extraire les branches si le texte les contient
-        branches = _extract_branches(content_for_index)
-        branch_param = ""
-        if branches:
-            keys = set(branches.keys())
-            if keys.issubset({"gen1", "gen2", "gen3"}):
-                branch_param = "gen"
-            else:
-                branch_param = "branch"
-
-        # Gens CSV pour filtrage RAG (si on trouve des clés genX dans branches)
-        gens_list = sorted([k for k in branches.keys() if k.startswith("gen")])
-        gens_csv  = ",".join(gens_list)
-
-        # Tags CSV (pour l’instant on ne passe pas de tags Excel -> simple)
-        tags_csv = ""
-
-        # Texte pour Chroma (toujours Q + contenu complet SANS la 1ère ligne si c’était un ?)
-        text = f"Vraag: {vraag}\nAntwoord: {content_for_index or full_answer}"
-        title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
-
-        metas.append({
-            "source": path,
-            "title": title,
-            "source_type": source_type,
-            "categorie": category or "",
-            "gens": gens_csv,                 # CSV
-            "video_url": video or "",
-            "photo": photo or "",
-            "tags": tags_csv,                 # CSV
-            "sheet": chosen_sheet or "",
-            "followup_q": followup_q or "",
-            "branch_param": branch_param,     # "gen" ou "branch" ou ""
-            "branch_keys": ",".join(branches.keys()) if branches else "",
-        })
-        texts.append(text)
-
-        # Index JSON (pour /chat lookup direct)
-        row_idx = {
-            "question": vraag,
-            "answer": content_for_index or full_answer,
-            "category": category,
-            "video_url": video or None,
-            "photo": photo or None,
-            "tags": [],  # pas de tags ligne par ligne ici
-            "source": path,
-            "sheet": chosen_sheet,
-            "followup_q": followup_q or None,
-            "branches": branches or None,     # { "wifipool": "...", "benisol": "..." } ou { "gen1": "...", ... }
-            "branch_param": branch_param or None,
-        }
-        index_rows.append(row_idx)
-
-        i = j  # on saute les lignes d’antwoord déjà consommées
-
-    if not texts:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
-
-    # Sauvegardes
-    os.makedirs(STORE_DIR, exist_ok=True)
-    index_path = os.path.join(STORE_DIR, "faq_index.json")
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_rows, f, ensure_ascii=False, indent=2)
-
-    vs = _get_vs()
-    vs.add_texts(texts=texts, metadatas=metas)
-    vs.persist()
-
-    return {"indexed_files": 1, "indexed_chunks": len(texts), "sheet_used": chosen_sheet, "wrote_index": index_path}
-
-# ---------- Ingestion universelle (fichier ou dossier) ----------
+# ---------- Ingestion dossier (txt/pdf/docx/html) ----------
 def ingest_folder(root: str, source_type: str = "mixed"):
     texts, metas = [], []
     file_count = 0
@@ -323,7 +153,8 @@ def ingest_folder(root: str, source_type: str = "mixed"):
                     chunks = [c for c in splitter.split_text(page_text) if c.strip()]
                     texts.extend(chunks)
                     metas.extend(
-                        [{"source": path, "title": title, "source_type": source_type, "page": page_no}] * len(chunks)
+                        [{"source": path, "title": title, "source_type": source_type, "page": page_no}]
+                        * len(chunks)
                     )
                 if any_page:
                     file_count += 1
@@ -343,7 +174,9 @@ def ingest_folder(root: str, source_type: str = "mixed"):
 
             chunks = [c for c in splitter.split_text(text) if c.strip()]
             texts.extend(chunks)
-            metas.extend([{"source": path, "title": title, "source_type": source_type}] * len(chunks))
+            metas.extend(
+                [{"source": path, "title": title, "source_type": source_type}] * len(chunks)
+            )
             file_count += 1
 
     if not texts:
@@ -354,6 +187,136 @@ def ingest_folder(root: str, source_type: str = "mixed"):
     vs.persist()
     return {"indexed_files": file_count, "indexed_chunks": len(texts)}
 
+# ---------- Ingestion Excel (FAQ) ----------
+def ingest_excel(path: str, source_type: str = "faq"):
+    """
+    Lis l'Excel et :
+      - choisit la feuille contenant 'Vraag'/'Antwoord',
+      - écrit store/faq_index.json,
+      - envoie les lignes dans Chroma (métadonnées scalaires).
+    Colonnes acceptées :
+      * 'Categorie'
+      * 'Vraag' / 'Question'
+      * 'Antwoord' / 'Answer'
+      * 'Foto' (optionnel)
+      * 'Filmpje' / 'Video' / 'Video_URL' (optionnel)
+      * colonnes 'Gen*' (optionnelles) => tags
+    """
+    if not os.path.exists(path):
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "file not found"}
+
+    xls = pd.ExcelFile(path, engine="openpyxl")
+    chosen_df, chosen_sheet = None, None
+    for sheet in xls.sheet_names:
+        df_try = xls.parse(sheet).fillna("")
+        c_q_try = _col_lookup(df_try, "Vraag", "Question", "Vragen")
+        c_a_try = _col_lookup(df_try, "Antwoord", "Answer")
+        if c_q_try and c_a_try:
+            chosen_df, chosen_sheet = df_try, sheet
+            break
+
+    if chosen_df is None:
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
+
+    df = chosen_df
+
+    c_q    = _col_lookup(df, "Vraag", "Question", "Vragen")
+    c_a    = _col_lookup(df, "Antwoord", "Answer")
+    c_cat  = _col_lookup(df, "Categorie", "Category")
+    c_photo= _col_lookup(df, "Foto", "Photo")
+    c_video= _col_lookup(df, "Filmpje", "Video", "Video_URL", "Video Url")
+
+    # Colonnes Gen (toutes celles dont le nom normalisé contient 'gen')
+    gen_cols_real = [c for c in df.columns if "gen" in _norm_name(c)]
+
+    texts, metas, index_rows = [], [], []
+
+    for _, row in df.iterrows():
+        vraag = str(row.get(c_q, "")).strip()
+        antw  = str(row.get(c_a, "")).strip()
+        if not vraag or not antw:
+            continue
+
+        category = str(row.get(c_cat, "")).strip() if c_cat else ""
+        photo    = str(row.get(c_photo, "")).strip() if c_photo else ""
+        video    = str(row.get(c_video, "")).strip() if c_video else ""
+
+        # Tags = colonnes cochées 'x' hors bases & hors gen*
+        base_cols = {c_q, c_a, c_cat, c_photo, c_video}
+        tags_list: List[str] = []
+        for col in df.columns:
+            cname = str(col)
+            if cname in base_cols:
+                continue
+            if "gen" in _norm_name(cname):
+                continue
+            v = row.get(col)
+            if _boolish(v):
+                tags_list.append(cname)
+
+        # ---- Détection automatique des cas 'clarify' (GEN1/GEN2 ou Wifipool/Benisol)
+        ask_gen, clarify_options, followup_q = _needs_clarify_and_options(antw)
+
+        # ---- Texte pour Chroma
+        text = f"Vraag: {vraag}\nAntwoord: {antw}"
+
+        # ---- Métadonnées scalaires (CSV) pour Chroma
+        gens_csv = ""  # on n'impose pas ici ; les colonnes 'Gen*' restent éventuelles
+        tags_csv = ",".join(tags_list) if tags_list else ""
+        title = (vraag[:80] + "…") if len(vraag) > 80 else vraag
+
+        metas.append({
+            "source": path,
+            "title": title,
+            "source_type": source_type,
+            "categorie": category or "",
+            "gens": gens_csv,
+            "video_url": video or "",
+            "photo": photo or "",
+            "tags": tags_csv,
+            "sheet": chosen_sheet or "",
+            "ask_gen": bool(ask_gen),
+            "followup_q": followup_q or "",
+            "clarify_options": ",".join(clarify_options) if clarify_options else "",
+        })
+        texts.append(text)
+
+        # ---- Index JSON
+        index_rows.append({
+            "question": vraag,
+            "answer": antw,
+            "category": category,
+            "gens": [],  # on laisse vide ici
+            "video_url": video or None,
+            "photo": photo or None,
+            "tags": tags_list,
+            "ask_gen": bool(ask_gen),
+            "followup_q": followup_q or None,
+            "clarify_options": clarify_options or None,
+            "source": path,
+            "sheet": chosen_sheet,
+        })
+
+    if not texts:
+        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
+
+    os.makedirs(STORE_DIR, exist_ok=True)
+    index_path = os.path.join(STORE_DIR, "faq_index.json")
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index_rows, f, ensure_ascii=False, indent=2)
+
+    vs = _get_vs()
+    vs.add_texts(texts=texts, metadatas=metas)
+    vs.persist()
+
+    return {
+        "indexed_files": 1,
+        "indexed_chunks": len(texts),
+        "sheet_used": chosen_sheet,
+        "wrote_index": index_path,
+    }
+
+# ---------- Ingestion universelle (fichier ou dossier) ----------
 def ingest_path(path: str, source_type: str = "mixed"):
     if not path:
         return {"indexed_files": 0, "indexed_chunks": 0}
