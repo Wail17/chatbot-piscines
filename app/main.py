@@ -1,10 +1,6 @@
 # app/main.py
-from typing import List, Optional, Dict, Any, Set, Tuple
-import os
-import json
-import re
-import unicodedata
-import shutil
+from typing import List, Optional, Dict, Any, Set
+import os, json, re, unicodedata, shutil
 from difflib import SequenceMatcher
 
 from fastapi import FastAPI
@@ -20,11 +16,9 @@ from .rag import (
 from .training import add_correction, search_correction, save_feedback
 from .config import CORRECTION_THRESHOLD, STORE_DIR
 
-# ---------------------------------------------------------------------
-# App & CORS
-# ---------------------------------------------------------------------
 app = FastAPI(title="Chatbot Piscines API")
 
+# ---------------------- CORS ----------------------
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
@@ -44,9 +38,7 @@ app.add_middleware(
     expose_headers=["Content-Type"],
 )
 
-# ---------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------
+# ---------------------- Models ----------------------
 class ChatRequest(BaseModel):
     query: str
     audience: str = "client"
@@ -54,8 +46,8 @@ class ChatRequest(BaseModel):
     extra: Optional[Dict[str, Any]] = None
 
 class IngestRequest(BaseModel):
-    path: str              # chemin du fichier .jsonl côté disque
-    source_type: str = "faq"
+    path: str
+    source_type: str = "mixed"
 
 class CorrectionIn(BaseModel):
     question: str
@@ -70,20 +62,15 @@ class FeedbackIn(BaseModel):
     notes: Optional[str] = None
     user: Optional[str] = None
 
-# ---------------------------------------------------------------------
-# Constantes / tips
-# ---------------------------------------------------------------------
 GEN_TIPS_NL = [
     "1) Een Gen 2 apparaat heeft een ethernet (internetkabel) aansluiting.",
     "2) Als je apparaat nog niet gekoppeld is aan je telefoon, en je drukt op het + teken bij stekkers en meetsensoren, en vervolgens op “toestellen zoeken”, dan krijg je bij een Gen 1 toestel meestal meerdere modules te zien, en bij een Gen 2 toestel maar 1 module.",
     "3) Een Gen 1 apparaat wordt meestal met een USB 5V stekker geleverd. Een Gen 2 apparaat heeft alleen een 220V stekker of een 12V stekker.",
 ]
 
+# ---------------------- JSONL index ----------------------
 JSONL_TARGET = os.path.join(STORE_DIR, "faq_index.jsonl")
 
-# ---------------------------------------------------------------------
-# Utils normalisation & matching
-# ---------------------------------------------------------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 
 def _normalize(s: str) -> str:
@@ -98,6 +85,7 @@ def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 def _load_jsonl(path: str) -> List[dict]:
+    """Charge un .jsonl (1 objet JSON par ligne)."""
     data: List[dict] = []
     if not os.path.exists(path):
         return data
@@ -107,10 +95,8 @@ def _load_jsonl(path: str) -> List[dict]:
             if not ln:
                 continue
             try:
-                obj = json.loads(ln)
-                data.append(obj)
+                data.append(json.loads(ln))
             except Exception:
-                # on ignore les lignes invalides
                 continue
     return data
 
@@ -121,13 +107,8 @@ def _row_get(d: dict, *keys: str, default=None):
     return default
 
 def _get_options_map(row: dict) -> Dict[str, dict]:
-    # support both 'opties' and 'options'
-    opts = _row_get(row, "opties", "options", default={})
-    if not isinstance(opts, dict):
-        return {}
-    return opts
+    return _row_get(row, "opties", "options", default={}) or {}
 
-# quelques synonymes utiles pour reconnaître les choix
 OPTION_SYNONYMS = {
     "gen1": {"gen1", "gen 1", "type 1", "wifi gen1", "gen1 apparaat"},
     "gen2": {"gen2", "gen 2", "type 2", "wifi gen2", "gen2 apparaat"},
@@ -137,43 +118,32 @@ OPTION_SYNONYMS = {
     "display": {"display", "display apparaat", "display-apparaat", "scherm"},
 }
 
-def _normalize_choice(s: str) -> str:
-    return _normalize(s)
-
 def _choice_key_for_user_input(row: dict, user_choice: str) -> Optional[str]:
-    """
-    Essaie de faire correspondre une réponse utilisateur ('gen1', 'wifipool', 'benisol', etc.)
-    à l'une des clés d'options dans le JSONL.
-    """
     if not user_choice:
         return None
-
     opts = _get_options_map(row)
     if not opts:
         return None
 
-    user = _normalize_choice(user_choice)
+    user = _normalize(user_choice)
 
-    # 1) exact / inclusion sur labels d'options
+    # exact/inclusion
     for k in opts.keys():
         nk = _normalize(k)
         if user == nk or user in nk or nk in user:
             return k
 
-    # 2) mapping via synonymes
-    # on regarde chaque clé d'option et on essaie de l'associer à une catégorie
+    # synonymes
     for canonical, variants in OPTION_SYNONYMS.items():
         if user in variants:
-            # trouve la 1ère option dont le label matche 'canonical'
             for k in opts.keys():
                 nk = _normalize(k)
                 if canonical in nk:
                     return k
-            # si pas trouvé via label, mais l'option existe en label exact canonical
             if canonical in opts:
                 return canonical
 
-    # 3) fuzzy
+    # fuzzy
     best = (0.0, None)
     for k in opts.keys():
         nk = _normalize(k)
@@ -183,19 +153,16 @@ def _choice_key_for_user_input(row: dict, user_choice: str) -> Optional[str]:
     return best[1] if best[0] >= 0.70 else None
 
 def _best_jsonl_row(user_q: str, items: List[dict], min_score: float = 0.80) -> Optional[dict]:
-    """Recherche robuste sur la clé 'vraag' (ou variantes)."""
     if not items:
         return None
     uq = _normalize(user_q)
 
-    # 1) exact / inclusion
     for row in items:
         q = _row_get(row, "vraag", "Vraag", "question", "Question", default="")
         qn = _normalize(q)
         if qn and (uq == qn or uq in qn or qn in uq):
             return row
 
-    # 2) fuzzy
     best = (0.0, None)
     for row in items:
         q = _row_get(row, "vraag", "Vraag", "question", "Question", default="")
@@ -217,7 +184,6 @@ def _parse_extra_choice(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
-    """Toujours supporté pour les cas historiques."""
     if not isinstance(extra, dict):
         return None
     g = str(extra.get("gen", "")).strip().lower()
@@ -233,15 +199,11 @@ def _answer_from_option_block(block: dict) -> str:
         return f"{ans}\n\n{add}"
     return ans
 
-# ---------------------------------------------------------------------
-# Chargement initial du JSONL
-# ---------------------------------------------------------------------
+# ---------------------- Load FAQ at startup ----------------------
 os.makedirs(STORE_DIR, exist_ok=True)
 _FAQ: List[dict] = _load_jsonl(JSONL_TARGET)
 
-# ---------------------------------------------------------------------
-# Endpoints utilitaires
-# ---------------------------------------------------------------------
+# ---------------------- Routes ----------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "faq_rows": len(_FAQ)}
@@ -251,27 +213,24 @@ def dbg_lookup(q: str):
     row = _best_jsonl_row(q, _FAQ)
     return {"q": q, "found": bool(row), "row": row}
 
-# ---------------------------------------------------------------------
-# Ingest JSONL (copie + reload)
-# ---------------------------------------------------------------------
 @app.post("/ingest")
 def ingest(req: IngestRequest):
-    global _FAQ  # IMPORTANT: avant toute lecture/écriture
-    path = req.path
+    # IMPORTANT: la première ligne de la fonction !
+    global _FAQ
 
+    path = req.path
     if not os.path.exists(path):
+        # maintenant on peut utiliser _FAQ sans erreur
         return {"reloaded": False, "error": "file not found", "faq_rows": len(_FAQ)}
 
     try:
+        os.makedirs(STORE_DIR, exist_ok=True)
         shutil.copyfile(path, JSONL_TARGET)
         _FAQ = _load_jsonl(JSONL_TARGET)
         return {"reloaded": True, "faq_rows": len(_FAQ)}
     except Exception as e:
         return {"reloaded": False, "error": str(e), "faq_rows": len(_FAQ)}
 
-# ---------------------------------------------------------------------
-# Training / Feedback
-# ---------------------------------------------------------------------
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
     return add_correction(req.question, req.answer, req.tags)
@@ -280,28 +239,27 @@ def train_correction(req: CorrectionIn):
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
 
-# ---------------------------------------------------------------------
-# Chat
-# ---------------------------------------------------------------------
+# ---------------------- Chat ----------------------
+def _best_faq_match(user_q: str) -> Optional[dict]:
+    return _best_jsonl_row(user_q, _FAQ)
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     q = (req.query or "").strip()
 
-    # 0) Corrections admin prioritaires
+    # 1) Corrections admin
     ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
 
-    # 1) Lookup JSONL
-    row = _best_jsonl_row(q, _FAQ)
+    # 2) Lookup JSONL (prioritaire)
+    row = _best_faq_match(q)
     if row:
         follow_up = bool(_row_get(row, "follow_up", "followup", default=False))
-        # options dict (opties / options)
         options_map = _get_options_map(row)
 
         if follow_up and options_map:
-            # l'utilisateur a-t-il déjà donné son choix ?
             choice_text = _parse_extra_choice(req.extra) or _parse_extra_gen(req.extra)
             if choice_text:
                 chosen = _choice_key_for_user_input(row, choice_text)
@@ -311,7 +269,6 @@ def chat(req: ChatRequest):
                                   "source": "jsonl", "page": None}]
                     return {"answer": answer_text, "citations": citations}
 
-            # Sinon : poser la clarification
             followup_q = _row_get(row, "follow_up_question", "followup_question", default="Maak eerst een keuze:")
             opts_labels = list(options_map.keys())
             return {
@@ -321,20 +278,13 @@ def chat(req: ChatRequest):
                                "source": "jsonl", "page": None}],
             }
 
-        # Pas de follow-up : réponse directe
         direct_answer = _row_get(row, "antwoord", "answer", "Antwoord", default=None)
         if isinstance(direct_answer, str) and direct_answer.strip():
             citations = [{"title": _row_get(row, "vraag", "Vraag", "question", "Question", default="FAQ"),
                           "source": "jsonl", "page": None}]
             return {"answer": direct_answer, "citations": citations}
 
-        # Si pas d'answer direct et pas d'options => vide
-        # On tente le fallback RAG
-        # Note: ça ne devrait pas arriver si le JSONL est bien formé
-        # mais on garde la robustesse.
-        # (continue vers fallback)
-
-    # 2) Fallback RAG si aucune ligne JSONL trouvée
+    # 3) Fallback RAG
     extra_gen = _parse_extra_gen(req.extra)
     try:
         gen = extra_gen or detect_gen(q)
