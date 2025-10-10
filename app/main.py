@@ -218,6 +218,22 @@ _reload_faq()
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 _MATCH_THRESHOLD = 0.68
 
+
+def _tokens(s: str) -> Set[str]:
+    return {tok for tok in s.split(" ") if tok}
+
+
+def _text_contains(haystack_norm: str, needle_norm: str) -> bool:
+    if not haystack_norm or not needle_norm:
+        return False
+    if needle_norm in haystack_norm or haystack_norm in needle_norm:
+        return True
+    hay_tokens = _tokens(haystack_norm)
+    needle_tokens = _tokens(needle_norm)
+    if not hay_tokens or not needle_tokens:
+        return False
+    return needle_tokens <= hay_tokens
+
 def _normalize(s: str | None) -> str:
     s = unicodedata.normalize("NFKD", (s or ""))
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
@@ -351,38 +367,60 @@ def _labels(row: dict) -> List[str]:
 
 def _map_choice_to_key(choice: str, option_labels: List[str]) -> str | None:
     t = _normalize(choice)
-    for key, al in _DEVICE_ALIASES.items():
-        if t in al:
-            cands = [lbl for lbl in option_labels if key in _normalize(lbl)]
-            if cands:
-                return cands[0]
-    for key, al in _GEN_ALIASES.items():
-        if t in al:
-            cands = [lbl for lbl in option_labels if "gen" in _normalize(lbl)]
-            if len(cands) == 1:
-                return cands[0]
-    matches = get_close_matches(choice, option_labels, n=1, cutoff=0.6)
+    if not t:
+        return None
+    label_info = [(lbl, _normalize(lbl)) for lbl in option_labels]
+
+    for key, aliases in _DEVICE_ALIASES.items():
+        key_norm = _normalize(key)
+        for alias in aliases:
+            alias_norm = _normalize(alias)
+            if _text_contains(t, alias_norm):
+                for lbl, lbl_norm in label_info:
+                    if _text_contains(lbl_norm, key_norm) or _text_contains(lbl_norm, alias_norm):
+                        return lbl
+
+    for key, aliases in _GEN_ALIASES.items():
+        key_norm = _normalize(key)
+        for alias in aliases:
+            alias_norm = _normalize(alias)
+            if _text_contains(t, alias_norm):
+                candidates = [
+                    lbl for lbl, lbl_norm in label_info if _text_contains(lbl_norm, key_norm)
+                ]
+                if len(candidates) == 1:
+                    return candidates[0]
+                if candidates:
+                    return candidates[0]
+
+    for lbl, lbl_norm in label_info:
+        if _text_contains(t, lbl_norm):
+            return lbl
+
+    matches = get_close_matches(choice, option_labels, n=1, cutoff=0.55)
     if matches:
         return matches[0]
-    for lbl in option_labels:
-        if _normalize(lbl) in t or t in _normalize(lbl):
-            return lbl
     return None
 
 def _looks_like_followup_choice(text: str) -> bool:
     t = _normalize(text)
-    bank = {
-        "gen1","gen 1","g1","gen2","gen 2","g2","gen3","gen 3","g3",
-        "wifipool","wifi","wifi apparaat","wifi-apparaat",
-        "benisol","zonder wifi","display","display apparaat","display-apparaat"
-    }
-    return t in bank
+    if not t:
+        return False
+    for aliases in list(_GEN_ALIASES.values()) + list(_DEVICE_ALIASES.values()):
+        for alias in aliases:
+            if _text_contains(t, _normalize(alias)):
+                return True
+    return False
 
 def _map_choice_to_genkey(choice: str) -> str | None:
     t = _normalize(choice)
-    for key, al in _GEN_ALIASES.items():
-        if t in al:
-            return key
+    if not t:
+        return None
+    for key, aliases in _GEN_ALIASES.items():
+        key_norm = _normalize(key)
+        for alias in aliases:
+            if _text_contains(t, _normalize(alias)) or _text_contains(t, key_norm):
+                return key
     return None
 
 def _choose_gen_answer(row: dict, gen_key: str) -> str | None:
@@ -520,12 +558,14 @@ def chat(req: ChatRequest, request: Request):
         if gen_key:
             chosen = _choose_gen_answer(base_row, gen_key)
             if chosen:
+                _PENDING_BY_CLIENT.pop(client_id, None)
                 return {"answer": chosen, "citations": _citations_for_row(base_row)}
 
         labels = _labels(base_row)
         if not labels:
             direct = (base_row.get("answer") or base_row.get("antwoord") or "").strip()
             if direct:
+                _PENDING_BY_CLIENT.pop(client_id, None)
                 return {"answer": direct, "citations": _citations_for_row(base_row)}
             return {"answer": "Geen antwoord gevonden.", "citations": []}
 
@@ -536,32 +576,38 @@ def chat(req: ChatRequest, request: Request):
                 "citations": _citations_for_row(base_row)
             }
         answer = _build_answer_for_option(base_row, label)
+        _PENDING_BY_CLIENT.pop(client_id, None)
         return {"answer": answer, "citations": _citations_for_row(base_row)}
 
-    # ----- 1b) follow-up SANS clarify_ref -> fallback via pending memory
+    # ----- follow-up zonder expliciete clarify_ref (pending memory)
     if _looks_like_followup_choice(q):
         pend = _pop_valid_pending(client_id)
         if pend:
             base_row = pend["row"]
-            labels = pend["labels"]
+            labels = pend.get("labels") or []
 
             gen_key = _map_choice_to_genkey(q)
             if gen_key:
                 chosen = _choose_gen_answer(base_row, gen_key)
                 if chosen:
+                    _PENDING_BY_CLIENT.pop(client_id, None)
                     return {"answer": chosen, "citations": _citations_for_row(base_row)}
 
             if labels:
-                label = _map_choice_to_key(q, labels) or get_close_matches(q, labels, n=1, cutoff=0.4)[0] if get_close_matches(q, labels, n=1, cutoff=0.4) else None
+                label = _map_choice_to_key(q, labels)
+                if not label:
+                    matches = get_close_matches(q, labels, n=1, cutoff=0.45)
+                    label = matches[0] if matches else None
                 if label:
+                    _PENDING_BY_CLIENT.pop(client_id, None)
                     answer = _build_answer_for_option(base_row, label)
                     return {"answer": answer, "citations": _citations_for_row(base_row)}
 
-        return {
-            "answer": "Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.",
-            "need_ref": True,
-            "citations": []
-        }
+            return {
+                "answer": "Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.",
+                "need_ref": True,
+                "citations": [],
+            }
 
     # ----- 2) lookup direct dans l'index
     row = _find_row_by_question(q)
@@ -570,8 +616,17 @@ def chat(req: ChatRequest, request: Request):
             labels = _labels(row)
             tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
             _set_pending(_client_id_from_request(request), row, labels)
+            intro = (row.get("answer") or row.get("antwoord") or "").strip()
+            follow_q = row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?"
+            parts = [intro] if intro else []
+            if follow_q:
+                parts.append(follow_q.strip())
+            if labels:
+                bullet_list = "\n".join(f"- {label}" for label in labels)
+                parts.append("Opties:\n" + bullet_list)
+            answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
             return {
-                "answer": row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?",
+                "answer": answer_text,
                 "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
                 "citations": _citations_for_row(row)
             }
