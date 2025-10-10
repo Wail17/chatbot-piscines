@@ -11,9 +11,9 @@ langchain>=0.2.13,<0.3
 langchain-community>=0.2.13,<0.3
 langchain-openai==0.1.8
 chromadb>=0.5.5,<0.6.0
+pysqlite3-binary==0.5.2.post3
 
 # SQLite fallback (certains containers Railway en ont besoin)
-pysqlite3-binary==0.5.2.post3
 
 # Parseurs de fichiers
 pypdf==6.0.0
@@ -30,4 +30,3 @@ openpyxl==3.1.5
 tiktoken==0.11.0
 httpx==0.28.1
 tenacity==8.5.0
-rapidfuzz==3.9.7

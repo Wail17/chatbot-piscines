@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
 from .ingest import ingest_path
-from .training import add_correction, search_correction, save_feedback
+from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .config import (
     CORRECTION_THRESHOLD, STORE_DIR,
     # optionnel si tu veux un /health bavard:
@@ -304,6 +304,32 @@ def train_correction(req: CorrectionIn):
 @app.post("/feedback")
 def feedback(req: FeedbackIn):
     return save_feedback(req.dict())
+
+
+@app.get("/debug/imports")
+def debug_imports():
+    out = {}
+    try:
+        import importlib.metadata as im
+        out["chromadb"] = im.version("chromadb")
+    except Exception as e:  # pragma: no cover - diagnostics only
+        out["chromadb_error"] = str(e)
+    try:
+        import sqlite3
+        out["sqlite3_version"] = getattr(sqlite3, "sqlite_version", "unknown")
+    except Exception as e:  # pragma: no cover - diagnostics only
+        out["sqlite3_error"] = str(e)
+    try:
+        import sys
+        out["python"] = sys.version
+        out["sys_path_sample"] = sys.path[:5]
+    except Exception:  # pragma: no cover - diagnostics only
+        pass
+    try:
+        out["vectorstore"] = vectorstore_status()
+    except Exception as e:  # pragma: no cover - diagnostics only
+        out["vectorstore_error"] = str(e)
+    return out
 
 # ---------------------------------------------------------------------
 # Chat
