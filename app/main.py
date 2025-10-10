@@ -11,7 +11,7 @@ from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .config import (
-    CORRECTION_THRESHOLD, STORE_DIR,
+    CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR,
     # optionnel si tu veux un /health bavard:
     # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
 )
@@ -80,15 +80,132 @@ GEN_TIPS_NL = [
 # Load FAQ
 # ---------------------------------------------------------------------
 _FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
+_FAQ_FALLBACK_JSONL = os.path.join(DATA_DIR, "all", "faq", "FAQAI.jsonl")
 _FAQ: List[dict] = []
 
-def _reload_faq() -> Tuple[int, List[dict]]:
-    data: List[dict] = []
+
+def _load_faq_from_store() -> List[dict]:
     try:
         with open(_FAQ_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if isinstance(data, list):
+            return data
     except Exception:
-        data = []
+        pass
+    return []
+
+
+def _coerce_str(val: Any) -> str:
+    if val is None:
+        return ""
+    return str(val).strip()
+
+
+def _load_faq_from_jsonl(path: str) -> List[dict]:
+    if not os.path.exists(path):
+        return []
+
+    rows: List[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+
+                question = _coerce_str(
+                    obj.get("vraag")
+                    or obj.get("Vraag")
+                    or obj.get("question")
+                    or obj.get("Question")
+                )
+                if not question:
+                    continue
+
+                category = _coerce_str(
+                    obj.get("categorie")
+                    or obj.get("Categorie")
+                    or obj.get("category")
+                    or obj.get("Category")
+                )
+                answer = _coerce_str(
+                    obj.get("antwoord")
+                    or obj.get("Antwoord")
+                    or obj.get("answer")
+                    or obj.get("Answer")
+                )
+                follow_raw = (
+                    obj.get("follow_up")
+                    or obj.get("Follow_up")
+                    or obj.get("followUp")
+                    or obj.get("FollowUp")
+                )
+                if isinstance(follow_raw, str):
+                    follow_up = follow_raw.strip().lower() in {"1", "true", "yes", "ja"}
+                else:
+                    follow_up = bool(follow_raw)
+                followup_q = _coerce_str(
+                    obj.get("follow_up_question")
+                    or obj.get("followup_q")
+                    or obj.get("clarify_question")
+                )
+
+                options_raw = (
+                    obj.get("opties")
+                    or obj.get("Opties")
+                    or obj.get("options")
+                    or obj.get("Options")
+                    or {}
+                )
+                options: Dict[str, Any] = {}
+                if isinstance(options_raw, dict):
+                    for label, payload in options_raw.items():
+                        key = _coerce_str(label) or str(label)
+                        options[key] = payload
+
+                row: Dict[str, Any] = {
+                    "category": category,
+                    "question": question,
+                    "answer": answer if not follow_up else (answer or ""),
+                    "follow_up": follow_up,
+                    "followup_q": followup_q if (follow_up and followup_q) else None,
+                    "options": options,
+                    "source": path,
+                }
+
+                video = (
+                    obj.get("video_url")
+                    or obj.get("video")
+                    or obj.get("Video")
+                    or obj.get("Filmpje")
+                    or obj.get("filmpje")
+                )
+                media = obj.get("media") if isinstance(obj.get("media"), dict) else None
+                if not video and media:
+                    video = media.get("video") or media.get("url")
+                video_str = _coerce_str(video)
+                if video_str:
+                    row["video_url"] = video_str
+
+                tags = obj.get("tags")
+                if isinstance(tags, list):
+                    row["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+
+                rows.append(row)
+    except Exception:
+        return []
+
+    return rows
+
+
+def _reload_faq() -> Tuple[int, List[dict]]:
+    data: List[dict] = _load_faq_from_store()
+    if not data:
+        data = _load_faq_from_jsonl(_FAQ_FALLBACK_JSONL)
     global _FAQ
     _FAQ = data
     return (len(_FAQ), _FAQ)
@@ -99,6 +216,7 @@ _reload_faq()
 # Normalization helpers
 # ---------------------------------------------------------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
+_MATCH_THRESHOLD = 0.68
 
 def _normalize(s: str | None) -> str:
     s = unicodedata.normalize("NFKD", (s or ""))
@@ -110,6 +228,43 @@ def _normalize(s: str | None) -> str:
 
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
+
+
+def _partial_ratio(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if shorter in longer:
+        return 1.0
+    matcher = SequenceMatcher(None, longer, shorter)
+    best = 0.0
+    for block in matcher.get_matching_blocks():
+        start = max(block.a - block.b, 0)
+        substring = longer[start:start + len(shorter)]
+        if not substring:
+            continue
+        best = max(best, SequenceMatcher(None, substring, shorter).ratio())
+        if best >= 0.999:
+            return 1.0
+    return best
+
+
+def _token_overlap(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    tokens_a = {tok for tok in a.split(" ") if tok}
+    tokens_b = {tok for tok in b.split(" ") if tok}
+    if not tokens_a or not tokens_b:
+        return 0.0
+    shared = len(tokens_a & tokens_b)
+    return shared / float(max(len(tokens_a), len(tokens_b)))
+
+
+def _similarity(a: str, b: str) -> float:
+    base = _ratio(a, b)
+    partial = _partial_ratio(a, b)
+    overlap = _token_overlap(a, b)
+    return max(base, partial, min(1.0, base + overlap * 0.5))
 
 # ---------------------------------------------------------------------
 # Follow-up memory (fallback sans clarify_ref)
@@ -157,10 +312,10 @@ def _find_row_by_question(user_q: str) -> dict | None:
         q = _normalize(row.get("question", ""))
         if not q:
             continue
-        sc = _ratio(uq, q)
+        sc = _similarity(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= 0.80 else None
+    return best[1] if best[0] >= _MATCH_THRESHOLD else None
 
 def _find_row_by_ref(ref_q: str) -> dict | None:
     if not ref_q:
@@ -173,10 +328,10 @@ def _find_row_by_ref(ref_q: str) -> dict | None:
             continue
         if uq == q or uq in q or q in uq:
             return row
-        sc = _ratio(uq, q)
+        sc = _similarity(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= 0.75 else None
+    return best[1] if best[0] >= (_MATCH_THRESHOLD - 0.05) else None
 
 # options / gen
 _GEN_ALIASES: Dict[str, set] = {
@@ -343,7 +498,12 @@ def chat(req: ChatRequest, request: Request):
     clarify_ref = (extra.get("clarify_ref") or extra.get("context_question") or "").strip()
 
     # Corrections admin
-    ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    ans = cite = None
+    score = 0.0
+    try:
+        ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    except Exception:
+        ans = None
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
@@ -431,7 +591,12 @@ def chat(req: ChatRequest, request: Request):
     try:
         docs = retrieve(q, gen_filter=gen)
     except TypeError:
-        docs = retrieve(q)
+        try:
+            docs = retrieve(q)
+        except Exception:
+            docs = []
+    except Exception:
+        docs = []
 
     try:
         found: Set[str] = extract_found_gens(docs)
@@ -454,5 +619,11 @@ def chat(req: ChatRequest, request: Request):
             "citations": [],
         }
 
-    answer, citations = generate_answer(q, docs)
+    try:
+        answer, citations = generate_answer(q, docs)
+    except Exception:
+        return {
+            "answer": "Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?",
+            "citations": [],
+        }
     return {"answer": answer, "citations": citations}
