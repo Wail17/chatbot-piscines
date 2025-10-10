@@ -276,11 +276,41 @@ def _token_overlap(a: str, b: str) -> float:
     return shared / float(max(len(tokens_a), len(tokens_b)))
 
 
+def _fuzzy_token_overlap(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    tokens_a = [tok for tok in a.split(" ") if tok]
+    tokens_b = [tok for tok in b.split(" ") if tok]
+    if not tokens_a or not tokens_b:
+        return 0.0
+
+    used: Set[str] = set()
+    hits = 0
+    for tok in tokens_a:
+        best = 0.0
+        best_token: Optional[str] = None
+        for candidate in tokens_b:
+            if candidate in used:
+                continue
+            score = SequenceMatcher(None, tok, candidate).ratio()
+            if score > best:
+                best = score
+                best_token = candidate
+        if best_token is not None and best >= 0.74:
+            used.add(best_token)
+            hits += 1
+
+    return hits / float(max(len(tokens_a), len(tokens_b)))
+
+
 def _similarity(a: str, b: str) -> float:
     base = _ratio(a, b)
     partial = _partial_ratio(a, b)
     overlap = _token_overlap(a, b)
-    return max(base, partial, min(1.0, base + overlap * 0.5))
+    fuzzy_overlap = _fuzzy_token_overlap(a, b)
+    blend_one = min(1.0, base + overlap * 0.5)
+    blend_two = min(1.0, base + fuzzy_overlap * 0.65)
+    return max(base, partial, overlap, fuzzy_overlap, blend_one, blend_two)
 
 # ---------------------------------------------------------------------
 # Follow-up memory (fallback sans clarify_ref)
