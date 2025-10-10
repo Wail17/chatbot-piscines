@@ -1,7 +1,7 @@
 # app/training.py
 import os, json, unicodedata, re
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
@@ -31,7 +31,6 @@ def _ensure_dirs():
         os.makedirs(fb_dir, exist_ok=True)
 
 def _corr_vs() -> Chroma:
-    """Retourne la collection Chroma dédiée aux corrections admin."""
     _ensure_dirs()
     return Chroma(
         persist_directory=CHROMA_DIR,
@@ -40,21 +39,22 @@ def _corr_vs() -> Chroma:
     )
 
 def add_correction(question: str, answer: str, tags: Optional[List[str]] = None) -> dict:
-    """Enregistre une correction (Q→A) prioritaire."""
     vs = _corr_vs()
     q_norm = _normalize(question)
     vs.add_texts(
         [q_norm],
-        metadatas=[{"type": "correction", "question": question, "question_norm": q_norm, "answer": answer, "tags": tags or []}],
+        metadatas=[{
+            "type": "correction",
+            "question": question,
+            "question_norm": q_norm,
+            "answer": answer,
+            "tags": tags or []
+        }],
     )
     vs.persist()
     return {"status": "ok", "added": 1}
 
 def search_correction(query: str, k: int = 1, threshold: float = 0.20):
-    """
-    Cherche une correction proche (score = distance cosine, plus petit = plus proche).
-    NB: on normalise l'entrée pour matcher l'ajout.
-    """
     vs = _corr_vs()
     pairs = vs.similarity_search_with_score(_normalize(query), k=k)
     if not pairs:
@@ -67,7 +67,6 @@ def search_correction(query: str, k: int = 1, threshold: float = 0.20):
     return None, None, score
 
 def save_feedback(payload: dict) -> dict:
-    """Sauvegarde un feedback JSONL (👍/👎, correction proposée, etc.)."""
     _ensure_dirs()
     payload = dict(payload)
     payload["ts"] = datetime.utcnow().isoformat() + "Z"
