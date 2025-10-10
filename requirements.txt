@@ -6,13 +6,13 @@ python-dotenv==1.0.1
 # OpenAI SDK
 openai>=1.40,<2
 
-# LangChain + Chroma (versions compatibles entre elles)
+# LangChain + Chroma
 langchain>=0.2.13,<0.3
 langchain-community>=0.2.13,<0.3
 langchain-openai==0.1.8
 chromadb>=0.5.5,<0.6.0
 
-# SQLite fallback pour Chroma (Linux/containers)
+# SQLite fallback (certains containers Railway en ont besoin)
 pysqlite3-binary==0.5.2.post3
 
 # Parseurs de fichiers
