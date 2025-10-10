@@ -7,7 +7,14 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
+from .rag import (
+    retrieve,
+    generate_answer,
+    detect_gen,
+    extract_found_gens,
+    detect_language_code,
+    translate_answer,
+)
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .config import (
@@ -242,6 +249,34 @@ def _normalize(s: str | None) -> str:
     s = _PUNCT_RE.sub("", s)
     return s.strip()
 
+
+_LANG_BY_REF: Dict[str, str] = {}
+
+
+def _ref_key(ref: str | None) -> str:
+    return _normalize(ref or "")
+
+
+def _remember_language(ref: str | None, lang: str | None) -> None:
+    lang = (lang or "").strip().lower()
+    key = _ref_key(ref)
+    if not key or not lang:
+        return
+    _LANG_BY_REF[key] = lang
+
+
+def _language_for_ref(ref: str | None) -> str | None:
+    key = _ref_key(ref)
+    if not key:
+        return None
+    return _LANG_BY_REF.get(key)
+
+
+def _ensure_language(text: str, lang_code: str | None) -> str:
+    if not text:
+        return text
+    return translate_answer(text, lang_code or "")
+
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
@@ -325,12 +360,15 @@ def _client_id_from_request(req: Request) -> str:
         return xf.split(",")[0].strip()
     return (getattr(req.client, "host", None) or "unknown").strip()
 
-def _set_pending(client_id: str, row: dict, labels: List[str]) -> None:
+def _set_pending(client_id: str, row: dict, labels: List[str], language: str | None = None) -> None:
+    if language:
+        _remember_language(row.get("question"), language)
     _PENDING_BY_CLIENT[client_id] = {
         "q": row.get("question") or "",
         "labels": labels,
         "ts": time.time(),
         "row": row,
+        "language": (language or "").strip().lower(),
     }
 
 def _pop_valid_pending(client_id: str) -> dict | None:
@@ -564,6 +602,21 @@ def chat(req: ChatRequest, request: Request):
     q = (req.query or "").strip()
     extra = req.extra or {}
     clarify_ref = (extra.get("clarify_ref") or extra.get("context_question") or "").strip()
+    client_id = _client_id_from_request(request)
+
+    lang_code = detect_language_code(q)
+    if not lang_code:
+        stored_lang = _language_for_ref(q)
+        if stored_lang:
+            lang_code = stored_lang
+    if clarify_ref and not lang_code:
+        lang_code = _language_for_ref(clarify_ref)
+    if not lang_code:
+        pending_lang = (_PENDING_BY_CLIENT.get(client_id) or {}).get("language") if client_id else None
+        if pending_lang:
+            lang_code = pending_lang
+    if not lang_code:
+        lang_code = "nl"
 
     # Corrections admin
     ans = cite = None
@@ -574,40 +627,44 @@ def chat(req: ChatRequest, request: Request):
         ans = None
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
-        return {"answer": ans, "citations": [cite], "used_chunks": used}
-
-    client_id = _client_id_from_request(request)
+        return {"answer": _ensure_language(ans, lang_code), "citations": [cite], "used_chunks": used}
 
     # ----- 1) follow-up avec clarify_ref
     if clarify_ref:
         base_row = _find_row_by_ref(clarify_ref)
         if not base_row:
-            return {"answer": "Ik kan je keuze niet aan de juiste vraag koppelen.", "citations": []}
+            return {"answer": _ensure_language("Ik kan je keuze niet aan de juiste vraag koppelen.", lang_code), "citations": []}
+
+        row_lang = _language_for_ref(base_row.get("question"))
+        if row_lang:
+            lang_code = row_lang
+        else:
+            _remember_language(base_row.get("question"), lang_code)
 
         gen_key = _map_choice_to_genkey(q)
         if gen_key:
             chosen = _choose_gen_answer(base_row, gen_key)
             if chosen:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                return {"answer": chosen, "citations": _citations_for_row(base_row)}
+                return {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
 
         labels = _labels(base_row)
         if not labels:
             direct = (base_row.get("answer") or base_row.get("antwoord") or "").strip()
             if direct:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                return {"answer": direct, "citations": _citations_for_row(base_row)}
-            return {"answer": "Geen antwoord gevonden.", "citations": []}
+                return {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row)}
+            return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
 
         label = _map_choice_to_key(q, labels)
         if not label:
             return {
-                "answer": "Ik herken deze keuze niet. Kies één van: " + ", ".join(labels),
+                "answer": _ensure_language("Ik herken deze keuze niet. Kies één van: " + ", ".join(labels), lang_code),
                 "citations": _citations_for_row(base_row)
             }
         answer = _build_answer_for_option(base_row, label)
         _PENDING_BY_CLIENT.pop(client_id, None)
-        return {"answer": answer, "citations": _citations_for_row(base_row)}
+        return {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
 
     # ----- follow-up zonder expliciete clarify_ref (pending memory)
     if _looks_like_followup_choice(q):
@@ -615,13 +672,18 @@ def chat(req: ChatRequest, request: Request):
         if pend:
             base_row = pend["row"]
             labels = pend.get("labels") or []
+            pend_lang = (pend.get("language") or "").strip().lower()
+            if pend_lang:
+                lang_code = pend_lang
+            else:
+                _remember_language(base_row.get("question"), lang_code)
 
             gen_key = _map_choice_to_genkey(q)
             if gen_key:
                 chosen = _choose_gen_answer(base_row, gen_key)
                 if chosen:
                     _PENDING_BY_CLIENT.pop(client_id, None)
-                    return {"answer": chosen, "citations": _citations_for_row(base_row)}
+                    return {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
 
             if labels:
                 label = _map_choice_to_key(q, labels)
@@ -631,10 +693,10 @@ def chat(req: ChatRequest, request: Request):
                 if label:
                     _PENDING_BY_CLIENT.pop(client_id, None)
                     answer = _build_answer_for_option(base_row, label)
-                    return {"answer": answer, "citations": _citations_for_row(base_row)}
+                    return {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
 
             return {
-                "answer": "Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.",
+                "answer": _ensure_language("Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.", lang_code),
                 "need_ref": True,
                 "citations": [],
             }
@@ -645,7 +707,8 @@ def chat(req: ChatRequest, request: Request):
         if row.get("follow_up"):
             labels = _labels(row)
             tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
-            _set_pending(_client_id_from_request(request), row, labels)
+            _remember_language(row.get("question"), lang_code)
+            _set_pending(client_id, row, labels, lang_code)
             intro = (row.get("answer") or row.get("antwoord") or "").strip()
             follow_q = row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?"
             parts = [intro] if intro else []
@@ -656,15 +719,16 @@ def chat(req: ChatRequest, request: Request):
                 parts.append("Opties:\n" + bullet_list)
             answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
             return {
-                "answer": answer_text,
+                "answer": _ensure_language(answer_text, lang_code),
                 "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
                 "citations": _citations_for_row(row)
             }
 
         direct = (row.get("answer") or row.get("antwoord") or "").strip()
         if direct:
+            _remember_language(row.get("question"), lang_code)
             extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
-            return {"answer": direct + extra_line, "citations": _citations_for_row(row)}
+            return {"answer": _ensure_language(direct + extra_line, lang_code), "citations": _citations_for_row(row)}
 
     # ----- 3) RAG fallback
     extra_gen = _parse_extra_gen(req.extra)
@@ -691,16 +755,17 @@ def chat(req: ChatRequest, request: Request):
     if not gen and found:
         options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen 2"]
         fake_row = {"question": q, "options": {o: {} for o in options}}
-        _set_pending(client_id, fake_row, options)
+        _remember_language(q, lang_code)
+        _set_pending(client_id, fake_row, options, lang_code)
         return {
-            "answer": "Hebt u een Gen 1 of een Gen 2 apparaat?",
+            "answer": _ensure_language("Hebt u een Gen 1 of een Gen 2 apparaat?", lang_code),
             "clarify": {"ref": q, "options": options, "tips": GEN_TIPS_NL},
             "citations": [],
         }
 
     if not docs:
         return {
-            "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
+            "answer": _ensure_language("Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?", lang_code),
             "citations": [],
         }
 
@@ -708,7 +773,7 @@ def chat(req: ChatRequest, request: Request):
         answer, citations = generate_answer(q, docs)
     except Exception:
         return {
-            "answer": "Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?",
+            "answer": _ensure_language("Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?", lang_code),
             "citations": [],
         }
     return {"answer": answer, "citations": citations}
