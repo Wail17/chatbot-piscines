@@ -3,9 +3,9 @@ from typing import List, Optional, Dict, Any, Set, Tuple
 import os, json, re, unicodedata, time
 from difflib import SequenceMatcher, get_close_matches
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
 from .ingest import ingest_path
@@ -61,6 +61,20 @@ class FeedbackIn(BaseModel):
     corrected_answer: Optional[str] = None
     notes: Optional[str] = None
     user: Optional[str] = None
+
+class CorrectionIn(BaseModel):
+    question: str
+    answer: str
+    tags: List[str] = Field(default_factory=list)   # évite la liste mutable partagée
+
+@app.post("/train/correction")
+def train_correction(req: CorrectionIn):
+    try:
+        return add_correction(req.question, req.answer, req.tags)
+    except Exception as e:
+        # => Swagger montrera maintenant le message exact (plus de 500 "muet")
+        raise HTTPException(status_code=500, detail=f"/train/correction error: {type(e).__name__}: {e}")
+(le reste de ton main.py peut rester tel quel)
 
 # ---------------------------------------------------------------------
 # Tips / Const
