@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
 from .ingest import ingest_path
-from .training import add_correction, search_correction, save_feedback
+from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .config import (
     CORRECTION_THRESHOLD, STORE_DIR,
     # optionnel si tu veux un /health bavard:
@@ -325,11 +325,13 @@ def debug_imports():
         import sys
         out["python"] = sys.version
         out["sys_path_sample"] = sys.path[:5]
-    except Exception:
+    except Exception:  # pragma: no cover - diagnostics only
         pass
-
+    try:
+        out["vectorstore"] = vectorstore_status()
+    except Exception as e:  # pragma: no cover - diagnostics only
+        out["vectorstore_error"] = str(e)
     return out
-
 
 # ---------------------------------------------------------------------
 # Chat
