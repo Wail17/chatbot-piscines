@@ -460,7 +460,12 @@ def chat(req: ChatRequest, request: Request):
     clarify_ref = (extra.get("clarify_ref") or extra.get("context_question") or "").strip()
 
     # Corrections admin
-    ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    ans = cite = None
+    score = 0.0
+    try:
+        ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    except Exception:
+        ans = None
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
@@ -548,7 +553,12 @@ def chat(req: ChatRequest, request: Request):
     try:
         docs = retrieve(q, gen_filter=gen)
     except TypeError:
-        docs = retrieve(q)
+        try:
+            docs = retrieve(q)
+        except Exception:
+            docs = []
+    except Exception:
+        docs = []
 
     try:
         found: Set[str] = extract_found_gens(docs)
@@ -571,5 +581,11 @@ def chat(req: ChatRequest, request: Request):
             "citations": [],
         }
 
-    answer, citations = generate_answer(q, docs)
+    try:
+        answer, citations = generate_answer(q, docs)
+    except Exception:
+        return {
+            "answer": "Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?",
+            "citations": [],
+        }
     return {"answer": answer, "citations": citations}
