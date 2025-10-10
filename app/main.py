@@ -312,13 +312,15 @@ def debug_imports():
     try:
         import importlib.metadata as im
         out["chromadb"] = im.version("chromadb")
-    except Exception as e:  # pragma: no cover - diagnostics only
+    except Exception as e:
         out["chromadb_error"] = str(e)
+
     try:
         import sqlite3
         out["sqlite3_version"] = getattr(sqlite3, "sqlite_version", "unknown")
-    except Exception as e:  # pragma: no cover - diagnostics only
+    except Exception as e:
         out["sqlite3_error"] = str(e)
+
     try:
         import sys
         out["python"] = sys.version
