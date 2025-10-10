@@ -11,7 +11,7 @@ from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .config import (
-    CORRECTION_THRESHOLD, STORE_DIR,
+    CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR,
     # optionnel si tu veux un /health bavard:
     # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
 )
@@ -80,15 +80,132 @@ GEN_TIPS_NL = [
 # Load FAQ
 # ---------------------------------------------------------------------
 _FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
+_FAQ_FALLBACK_JSONL = os.path.join(DATA_DIR, "all", "faq", "FAQAI.jsonl")
 _FAQ: List[dict] = []
 
-def _reload_faq() -> Tuple[int, List[dict]]:
-    data: List[dict] = []
+
+def _load_faq_from_store() -> List[dict]:
     try:
         with open(_FAQ_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if isinstance(data, list):
+            return data
     except Exception:
-        data = []
+        pass
+    return []
+
+
+def _coerce_str(val: Any) -> str:
+    if val is None:
+        return ""
+    return str(val).strip()
+
+
+def _load_faq_from_jsonl(path: str) -> List[dict]:
+    if not os.path.exists(path):
+        return []
+
+    rows: List[dict] = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+
+                question = _coerce_str(
+                    obj.get("vraag")
+                    or obj.get("Vraag")
+                    or obj.get("question")
+                    or obj.get("Question")
+                )
+                if not question:
+                    continue
+
+                category = _coerce_str(
+                    obj.get("categorie")
+                    or obj.get("Categorie")
+                    or obj.get("category")
+                    or obj.get("Category")
+                )
+                answer = _coerce_str(
+                    obj.get("antwoord")
+                    or obj.get("Antwoord")
+                    or obj.get("answer")
+                    or obj.get("Answer")
+                )
+                follow_raw = (
+                    obj.get("follow_up")
+                    or obj.get("Follow_up")
+                    or obj.get("followUp")
+                    or obj.get("FollowUp")
+                )
+                if isinstance(follow_raw, str):
+                    follow_up = follow_raw.strip().lower() in {"1", "true", "yes", "ja"}
+                else:
+                    follow_up = bool(follow_raw)
+                followup_q = _coerce_str(
+                    obj.get("follow_up_question")
+                    or obj.get("followup_q")
+                    or obj.get("clarify_question")
+                )
+
+                options_raw = (
+                    obj.get("opties")
+                    or obj.get("Opties")
+                    or obj.get("options")
+                    or obj.get("Options")
+                    or {}
+                )
+                options: Dict[str, Any] = {}
+                if isinstance(options_raw, dict):
+                    for label, payload in options_raw.items():
+                        key = _coerce_str(label) or str(label)
+                        options[key] = payload
+
+                row: Dict[str, Any] = {
+                    "category": category,
+                    "question": question,
+                    "answer": answer if not follow_up else (answer or ""),
+                    "follow_up": follow_up,
+                    "followup_q": followup_q if (follow_up and followup_q) else None,
+                    "options": options,
+                    "source": path,
+                }
+
+                video = (
+                    obj.get("video_url")
+                    or obj.get("video")
+                    or obj.get("Video")
+                    or obj.get("Filmpje")
+                    or obj.get("filmpje")
+                )
+                media = obj.get("media") if isinstance(obj.get("media"), dict) else None
+                if not video and media:
+                    video = media.get("video") or media.get("url")
+                video_str = _coerce_str(video)
+                if video_str:
+                    row["video_url"] = video_str
+
+                tags = obj.get("tags")
+                if isinstance(tags, list):
+                    row["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+
+                rows.append(row)
+    except Exception:
+        return []
+
+    return rows
+
+
+def _reload_faq() -> Tuple[int, List[dict]]:
+    data: List[dict] = _load_faq_from_store()
+    if not data:
+        data = _load_faq_from_jsonl(_FAQ_FALLBACK_JSONL)
     global _FAQ
     _FAQ = data
     return (len(_FAQ), _FAQ)
@@ -343,7 +460,12 @@ def chat(req: ChatRequest, request: Request):
     clarify_ref = (extra.get("clarify_ref") or extra.get("context_question") or "").strip()
 
     # Corrections admin
-    ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    ans = cite = None
+    score = 0.0
+    try:
+        ans, cite, score = search_correction(q, k=1, threshold=CORRECTION_THRESHOLD)
+    except Exception:
+        ans = None
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
         return {"answer": ans, "citations": [cite], "used_chunks": used}
@@ -431,7 +553,12 @@ def chat(req: ChatRequest, request: Request):
     try:
         docs = retrieve(q, gen_filter=gen)
     except TypeError:
-        docs = retrieve(q)
+        try:
+            docs = retrieve(q)
+        except Exception:
+            docs = []
+    except Exception:
+        docs = []
 
     try:
         found: Set[str] = extract_found_gens(docs)
@@ -454,5 +581,11 @@ def chat(req: ChatRequest, request: Request):
             "citations": [],
         }
 
-    answer, citations = generate_answer(q, docs)
+    try:
+        answer, citations = generate_answer(q, docs)
+    except Exception:
+        return {
+            "answer": "Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?",
+            "citations": [],
+        }
     return {"answer": answer, "citations": citations}
