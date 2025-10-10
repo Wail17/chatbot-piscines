@@ -216,6 +216,7 @@ _reload_faq()
 # Normalization helpers
 # ---------------------------------------------------------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
+_MATCH_THRESHOLD = 0.68
 
 def _normalize(s: str | None) -> str:
     s = unicodedata.normalize("NFKD", (s or ""))
@@ -227,6 +228,43 @@ def _normalize(s: str | None) -> str:
 
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
+
+
+def _partial_ratio(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if shorter in longer:
+        return 1.0
+    matcher = SequenceMatcher(None, longer, shorter)
+    best = 0.0
+    for block in matcher.get_matching_blocks():
+        start = max(block.a - block.b, 0)
+        substring = longer[start:start + len(shorter)]
+        if not substring:
+            continue
+        best = max(best, SequenceMatcher(None, substring, shorter).ratio())
+        if best >= 0.999:
+            return 1.0
+    return best
+
+
+def _token_overlap(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    tokens_a = {tok for tok in a.split(" ") if tok}
+    tokens_b = {tok for tok in b.split(" ") if tok}
+    if not tokens_a or not tokens_b:
+        return 0.0
+    shared = len(tokens_a & tokens_b)
+    return shared / float(max(len(tokens_a), len(tokens_b)))
+
+
+def _similarity(a: str, b: str) -> float:
+    base = _ratio(a, b)
+    partial = _partial_ratio(a, b)
+    overlap = _token_overlap(a, b)
+    return max(base, partial, min(1.0, base + overlap * 0.5))
 
 # ---------------------------------------------------------------------
 # Follow-up memory (fallback sans clarify_ref)
@@ -274,10 +312,10 @@ def _find_row_by_question(user_q: str) -> dict | None:
         q = _normalize(row.get("question", ""))
         if not q:
             continue
-        sc = _ratio(uq, q)
+        sc = _similarity(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= 0.80 else None
+    return best[1] if best[0] >= _MATCH_THRESHOLD else None
 
 def _find_row_by_ref(ref_q: str) -> dict | None:
     if not ref_q:
@@ -290,10 +328,10 @@ def _find_row_by_ref(ref_q: str) -> dict | None:
             continue
         if uq == q or uq in q or q in uq:
             return row
-        sc = _ratio(uq, q)
+        sc = _similarity(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= 0.75 else None
+    return best[1] if best[0] >= (_MATCH_THRESHOLD - 0.05) else None
 
 # options / gen
 _GEN_ALIASES: Dict[str, set] = {
