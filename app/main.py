@@ -579,33 +579,6 @@ def chat(req: ChatRequest, request: Request):
         _PENDING_BY_CLIENT.pop(client_id, None)
         return {"answer": answer, "citations": _citations_for_row(base_row)}
 
-    # ----- 2) lookup direct dans l'index
-    row = _find_row_by_question(q)
-    if row:
-        if row.get("follow_up"):
-            labels = _labels(row)
-            tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
-            _set_pending(_client_id_from_request(request), row, labels)
-            intro = (row.get("answer") or row.get("antwoord") or "").strip()
-            follow_q = row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?"
-            parts = [intro] if intro else []
-            if follow_q:
-                parts.append(follow_q.strip())
-            if labels:
-                bullet_list = "\n".join(f"- {label}" for label in labels)
-                parts.append("Opties:\n" + bullet_list)
-            answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
-            return {
-                "answer": answer_text,
-                "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
-                "citations": _citations_for_row(row)
-            }
-
-        direct = (row.get("answer") or row.get("antwoord") or "").strip()
-        if direct:
-            extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
-            return {"answer": direct + extra_line, "citations": _citations_for_row(row)}
-
     # ----- follow-up zonder expliciete clarify_ref (pending memory)
     if _looks_like_followup_choice(q):
         pend = _pop_valid_pending(client_id)
@@ -635,6 +608,33 @@ def chat(req: ChatRequest, request: Request):
                 "need_ref": True,
                 "citations": [],
             }
+
+    # ----- 2) lookup direct dans l'index
+    row = _find_row_by_question(q)
+    if row:
+        if row.get("follow_up"):
+            labels = _labels(row)
+            tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
+            _set_pending(_client_id_from_request(request), row, labels)
+            intro = (row.get("answer") or row.get("antwoord") or "").strip()
+            follow_q = row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?"
+            parts = [intro] if intro else []
+            if follow_q:
+                parts.append(follow_q.strip())
+            if labels:
+                bullet_list = "\n".join(f"- {label}" for label in labels)
+                parts.append("Opties:\n" + bullet_list)
+            answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
+            return {
+                "answer": answer_text,
+                "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
+                "citations": _citations_for_row(row)
+            }
+
+        direct = (row.get("answer") or row.get("antwoord") or "").strip()
+        if direct:
+            extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
+            return {"answer": direct + extra_line, "citations": _citations_for_row(row)}
 
     # ----- 3) RAG fallback
     extra_gen = _parse_extra_gen(req.extra)
