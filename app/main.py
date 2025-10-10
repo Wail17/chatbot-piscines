@@ -10,7 +10,11 @@ from pydantic import BaseModel, Field
 from .rag import retrieve, generate_answer, detect_gen, extract_found_gens
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback
-from .config import CORRECTION_THRESHOLD, STORE_DIR
+from .config import (
+    CORRECTION_THRESHOLD, STORE_DIR,
+    # optionnel si tu veux un /health bavard:
+    # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
+)
 
 app = FastAPI(title="Chatbot Piscines API")
 
@@ -52,7 +56,8 @@ class IngestRequest(BaseModel):
 class CorrectionIn(BaseModel):
     question: str
     answer: str
-    tags: List[str] = []
+    # important: pas de liste mutable par défaut
+    tags: List[str] = Field(default_factory=list)
 
 class FeedbackIn(BaseModel):
     question: str
@@ -61,20 +66,6 @@ class FeedbackIn(BaseModel):
     corrected_answer: Optional[str] = None
     notes: Optional[str] = None
     user: Optional[str] = None
-
-class CorrectionIn(BaseModel):
-    question: str
-    answer: str
-    tags: List[str] = Field(default_factory=list)   # évite la liste mutable partagée
-
-@app.post("/train/correction")
-def train_correction(req: CorrectionIn):
-    try:
-        return add_correction(req.question, req.answer, req.tags)
-    except Exception as e:
-        # => Swagger montrera maintenant le message exact (plus de 500 "muet")
-        raise HTTPException(status_code=500, detail=f"/train/correction error: {type(e).__name__}: {e}")
-(le reste de ton main.py peut rester tel quel)
 
 # ---------------------------------------------------------------------
 # Tips / Const
@@ -128,7 +119,6 @@ _PENDING_BY_CLIENT: Dict[str, Dict[str, Any]] = {}
 _PENDING_TTL = 180.0  # seconds
 
 def _client_id_from_request(req: Request) -> str:
-    # essaye d'utiliser X-Forwarded-For d'abord (Railway/Proxies)
     xf = req.headers.get("x-forwarded-for")
     if xf:
         return xf.split(",")[0].strip()
@@ -216,7 +206,6 @@ def _map_choice_to_key(choice: str, option_labels: List[str]) -> str | None:
             cands = [lbl for lbl in option_labels if "gen" in _normalize(lbl)]
             if len(cands) == 1:
                 return cands[0]
-            # sinon on tente fuzzy
     matches = get_close_matches(choice, option_labels, n=1, cutoff=0.6)
     if matches:
         return matches[0]
@@ -304,9 +293,13 @@ def ingest(req: IngestRequest):
     _reload_faq()
     return {"reloaded": True, "faq_rows": len(_FAQ), **res}
 
+# >>> UNIQUE définition de /train/correction (avec try/except)
 @app.post("/train/correction")
 def train_correction(req: CorrectionIn):
-    return add_correction(req.question, req.answer, req.tags)
+    try:
+        return add_correction(req.question, req.answer, req.tags)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"/train/correction error: {type(e).__name__}: {e}")
 
 @app.post("/feedback")
 def feedback(req: FeedbackIn):
@@ -364,21 +357,18 @@ def chat(req: ChatRequest, request: Request):
             base_row = pend["row"]
             labels = pend["labels"]
 
-            # GEN direct
             gen_key = _map_choice_to_genkey(q)
             if gen_key:
                 chosen = _choose_gen_answer(base_row, gen_key)
                 if chosen:
                     return {"answer": chosen, "citations": _citations_for_row(base_row)}
 
-            # sinon options
             if labels:
                 label = _map_choice_to_key(q, labels) or get_close_matches(q, labels, n=1, cutoff=0.4)[0] if get_close_matches(q, labels, n=1, cutoff=0.4) else None
                 if label:
                     answer = _build_answer_for_option(base_row, label)
                     return {"answer": answer, "citations": _citations_for_row(base_row)}
 
-        # si rien en mémoire, on demande le contexte
         return {
             "answer": "Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.",
             "need_ref": True,
@@ -391,7 +381,6 @@ def chat(req: ChatRequest, request: Request):
         if row.get("follow_up"):
             labels = _labels(row)
             tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
-            # mémorise le follow-up pour ce client (fallback si la sélection revient sans ref)
             _set_pending(_client_id_from_request(request), row, labels)
             return {
                 "answer": row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?",
@@ -422,8 +411,7 @@ def chat(req: ChatRequest, request: Request):
         found = set()
 
     if not gen and found:
-        options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen2"]
-        # on stocke aussi comme pending
+        options = sorted(list(found & {"gen1", "gen2", "gen3"})) or ["gen1", "gen 2"]
         fake_row = {"question": q, "options": {o: {} for o in options}}
         _set_pending(client_id, fake_row, options)
         return {
