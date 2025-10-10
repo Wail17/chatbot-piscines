@@ -3,6 +3,12 @@ import os, json, unicodedata, re, uuid, logging
 from datetime import datetime
 from typing import List, Optional, Tuple, Any, Dict
 
+# Fallback SQLite (certains containers n'ont pas sqlite3 natif correct)
+try:
+    import sqlite3  # noqa
+except Exception:  # pragma: no cover - fallback path
+    import pysqlite3 as sqlite3  # noqa
+
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 
