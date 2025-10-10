@@ -1,0 +1,6 @@
+[phases.setup]
+nixPkgs = ['python312', 'gcc']
+
+[variables]
+NIXPACKS_PYTHON_REQUIREMENTS_PATH = 'requirements.txt'
+NIXPACKS_PYTHON_PIP_EXTRA_ARGS = '--no-cache-dir --upgrade'
