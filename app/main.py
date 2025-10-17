@@ -242,6 +242,44 @@ _reload_faq()
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 _MATCH_THRESHOLD = 0.68
 _SEMANTIC_MATCH_THRESHOLD = 0.78
+_AMBIGUITY_GAP = 0.07
+_AMBIGUITY_PEER_THRESHOLD = 0.55
+_AMBIGUITY_STOPWORDS = {"hoe", "ik", "kan", "een", "de", "het", "in", "op", "wat", "je", "met", "voor", "en", "of", "is", "moet", "mijn", "van", "aan", "te", "heb", "hebt", "wil", "wifipool", "apparaat"}
+
+
+_ORDINAL_ALIASES: Dict[str, int] = {
+    "eerste": 1,
+    "tweede": 2,
+    "derde": 3,
+    "vierde": 4,
+    "vijfde": 5,
+    "zesde": 6,
+    "seventh": 7,
+    "zevende": 7,
+    "achtste": 8,
+    "negende": 9,
+    "tiende": 10,
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5,
+    "sixth": 6,
+    "seventh": 7,
+    "eighth": 8,
+    "ninth": 9,
+    "tenth": 10,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+}
 
 
 def _tokens(s: str) -> Set[str]:
@@ -423,35 +461,44 @@ def _ensure_row_embedding(row: dict, embedder: OpenAIEmbeddings) -> Optional[Lis
         return vector
 
 
-def _semantic_match_row(user_q: str) -> Optional[dict]:
+def _semantic_scores(user_q: str) -> Dict[int, Tuple[dict, float]]:
     global _FAQ_EMBED_DISABLED
+    results: Dict[int, Tuple[dict, float]] = {}
     if not _FAQ or not user_q or _FAQ_EMBED_DISABLED:
-        return None
+        return results
     try:
         embedder = _faq_embedder()
     except Exception:
-        return None
+        return results
     try:
         query_vec = embedder.embed_query(user_q)
     except Exception:
         _disable_faq_embeddings()
-        return None
+        return results
 
-    best_score = 0.0
-    best_row: Optional[dict] = None
     for row in _FAQ:
         try:
             vec = _ensure_row_embedding(row, embedder)
         except Exception:
             _disable_faq_embeddings()
-            return None
+            return {}
         if not vec:
             continue
         score = _cosine_similarity(query_vec, vec)
+        if score <= 0.0:
+            continue
+        results[id(row)] = (row, score)
+    return results
+
+
+def _semantic_match_row(user_q: str) -> Optional[dict]:
+    scores = _semantic_scores(user_q)
+    best_score = 0.0
+    best_row: Optional[dict] = None
+    for row, score in (scores.values() if scores else []):
         if score > best_score:
             best_score = score
             best_row = row
-
     if best_score >= _SEMANTIC_MATCH_THRESHOLD:
         return best_row
     return None
@@ -469,18 +516,35 @@ def _client_id_from_request(req: Request) -> str:
         return xf.split(",")[0].strip()
     return (getattr(req.client, "host", None) or "unknown").strip()
 
-def _set_pending(client_id: str, row: dict, labels: List[str], language: str | None = None) -> None:
-    if language:
-        _remember_language(row.get("question"), language)
-    _PENDING_BY_CLIENT[client_id] = {
-        "q": row.get("question") or "",
+def _set_pending(
+    client_id: str,
+    row: Optional[dict],
+    labels: List[str],
+    language: str | None = None,
+    *,
+    mode: str = "followup",
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    question_ref = ""
+    if isinstance(row, dict):
+        question_ref = row.get("question") or ""
+    elif extra:
+        question_ref = extra.get("question", "")
+    if question_ref and language:
+        _remember_language(question_ref, language)
+    entry: Dict[str, Any] = {
+        "q": question_ref,
         "labels": labels,
         "ts": time.time(),
-        "row": row,
+        "row": row if isinstance(row, dict) else None,
         "language": (language or "").strip().lower(),
+        "mode": mode,
     }
+    if extra:
+        entry.update(extra)
+    _PENDING_BY_CLIENT[client_id] = entry
 
-def _pop_valid_pending(client_id: str) -> dict | None:
+def _get_valid_pending(client_id: str) -> dict | None:
     item = _PENDING_BY_CLIENT.get(client_id)
     if not item:
         return None
@@ -489,28 +553,163 @@ def _pop_valid_pending(client_id: str) -> dict | None:
         return None
     return item
 
+def _pop_valid_pending(client_id: str) -> dict | None:
+    item = _get_valid_pending(client_id)
+    if item:
+        _PENDING_BY_CLIENT.pop(client_id, None)
+    return item
+
 # ---------------------------------------------------------------------
 # Matching helpers
 # ---------------------------------------------------------------------
-def _find_row_by_question(user_q: str) -> dict | None:
+def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
     if not _FAQ:
-        return None
+        return (None, [])
     uq = _normalize(user_q)
+    if not uq:
+        return (None, [])
+    direct_matches: List[dict] = []
+    row_scores: Dict[int, Tuple[dict, float]] = {}
     for row in _FAQ:
-        q = _normalize(row.get("question", ""))
-        if q and (uq == q or uq in q or q in uq):
-            return row
-    best = (0.0, None)
-    for row in _FAQ:
-        q = _normalize(row.get("question", ""))
-        if not q:
+        q_norm = _normalize(row.get("question", ""))
+        if not q_norm:
             continue
-        sc = _similarity(uq, q)
-        if sc > best[0]:
-            best = (sc, row)
-    if best[0] >= _MATCH_THRESHOLD:
+        if uq == q_norm or (uq and (uq in q_norm or q_norm in uq)):
+            direct_matches.append(row)
+        score = _similarity(uq, q_norm)
+        if score > 0.0:
+            key = id(row)
+            stored = row_scores.get(key)
+            if not stored or score > stored[1]:
+                row_scores[key] = (row, score)
+    if direct_matches:
+        if len(direct_matches) == 1:
+            return (direct_matches[0], [])
+        return (None, direct_matches[:4])
+    semantic_scores = _semantic_scores(user_q)
+    for key, (row, score) in semantic_scores.items():
+        stored = row_scores.get(key)
+        if stored:
+            if score > stored[1]:
+                row_scores[key] = (row, score)
+        else:
+            row_scores[key] = (row, score)
+    if not row_scores:
+        return (None, [])
+    candidates = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
+    candidates = [item for item in candidates if item[1] > 0.0]
+    if not candidates:
+        return (None, [])
+    top_score = candidates[0][1]
+    if len(candidates) >= 2:
+        top_norm = _normalize(candidates[0][0].get("question", ""))
+        top_tokens = {tok for tok in top_norm.split(" ") if tok and tok not in _AMBIGUITY_STOPWORDS}
+        ambiguous: List[Tuple[dict, float]] = []
+        for row, score in candidates:
+            if len(ambiguous) >= 4:
+                break
+            if score < _MATCH_THRESHOLD or (top_score - score) > _AMBIGUITY_GAP:
+                continue
+            row_norm = _normalize(row.get("question", ""))
+            peer_sim = _similarity(top_norm, row_norm) if top_norm and row_norm else 0.0
+            peer_overlap = _token_overlap(top_norm, row_norm)
+            row_tokens = {tok for tok in row_norm.split(" ") if tok and tok not in _AMBIGUITY_STOPWORDS}
+            if top_tokens and row_tokens and not (top_tokens & row_tokens):
+                continue
+            if peer_sim >= _AMBIGUITY_PEER_THRESHOLD or peer_overlap >= _AMBIGUITY_PEER_THRESHOLD:
+                ambiguous.append((row, score))
+        if len(ambiguous) >= 2:
+            return (None, [row for row, _ in ambiguous])
+    if top_score >= _MATCH_THRESHOLD:
+        return (candidates[0][0], [])
+    return (None, [])
+
+def _build_ambiguity_message(rows: List[dict]) -> str:
+    if not rows:
+        return "Kun je aangeven welke vraag je precies bedoelt?"
+    parts: List[str] = []
+    for idx, row in enumerate(rows, start=1):
+        question = (row.get("question") or "").strip() or "Vraag"
+        parts.append(f"{idx}) '{question}'")
+    range_text = "1" if len(parts) == 1 else f"1–{len(parts)}"
+    joined = " ".join(parts)
+    return ("Bedoel je met je vraag: " + joined + f"? Kies het nummer ({range_text}) of antwoord: 'ja, ik bedoel vraag X'.")
+
+def _parse_choice_index(choice: str, count: int) -> Optional[int]:
+    if count <= 0:
+        return None
+    t = _normalize(choice)
+    if not t:
+        return None
+    match = re.search(r"\b(\d{1,2})\b", t)
+    if match:
+        idx = int(match.group(1))
+        if 1 <= idx <= count:
+            return idx
+    for word, value in _ORDINAL_ALIASES.items():
+        if word in t and 1 <= value <= count:
+            return value
+    return None
+
+
+def _resolve_ambiguity_selection(pending: Dict[str, Any], choice_text: str) -> Optional[dict]:
+    candidates: List[dict] = pending.get("candidates") or []
+    if not candidates:
+        return None
+    idx = _parse_choice_index(choice_text, len(candidates))
+    if idx:
+        return candidates[idx - 1]
+    norm_choice = _normalize(choice_text)
+    if not norm_choice:
+        return None
+    best: Tuple[float, Optional[dict]] = (0.0, None)
+    for candidate in candidates:
+        q_norm = _normalize(candidate.get("question") or "")
+        if not q_norm:
+            continue
+        if _text_contains(norm_choice, q_norm) or _text_contains(q_norm, norm_choice):
+            return candidate
+        score = _similarity(norm_choice, q_norm)
+        if score > best[0]:
+            best = (score, candidate)
+    if best[0] >= 0.55:
         return best[1]
-    return _semantic_match_row(user_q)
+    return None
+
+
+def _respond_for_row(row: dict, lang_code: str, client_id: str) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+    question_ref = row.get("question")
+    if question_ref:
+        _remember_language(question_ref, lang_code)
+    if row.get("follow_up"):
+        labels = _labels(row)
+        tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
+        _set_pending(client_id, row, labels, lang_code, mode="followup")
+        intro = (row.get("answer") or row.get("antwoord") or "").strip()
+        follow_q = row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?"
+        parts = [intro] if intro else []
+        if follow_q:
+            parts.append(follow_q.strip())
+        if labels:
+            bullet_list = "\n".join(f"- {label}" for label in labels)
+            parts.append("Opties:\n" + bullet_list)
+        answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
+        return {
+            "answer": _ensure_language(answer_text, lang_code),
+            "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
+            "citations": _citations_for_row(row),
+        }
+    direct = (row.get("answer") or row.get("antwoord") or "").strip()
+    if direct:
+        extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
+        return {
+            "answer": _ensure_language(direct + extra_line, lang_code),
+            "citations": _citations_for_row(row),
+        }
+    return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+
 
 def _find_row_by_ref(ref_q: str) -> dict | None:
     if not ref_q:
@@ -550,6 +749,9 @@ def _map_choice_to_key(choice: str, option_labels: List[str]) -> str | None:
     t = _normalize(choice)
     if not t:
         return None
+    idx = _parse_choice_index(choice, len(option_labels))
+    if idx:
+        return option_labels[idx - 1]
     label_info = [(lbl, _normalize(lbl)) for lbl in option_labels]
 
     for key, aliases in _DEVICE_ALIASES.items():
@@ -587,6 +789,11 @@ def _looks_like_followup_choice(text: str) -> bool:
     t = _normalize(text)
     if not t:
         return False
+    if any(ch.isdigit() for ch in t):
+        return True
+    for word in _ORDINAL_ALIASES.keys():
+        if word in t:
+            return True
     for aliases in list(_GEN_ALIASES.values()) + list(_DEVICE_ALIASES.values()):
         for alias in aliases:
             if _text_contains(t, _normalize(alias)):
@@ -744,6 +951,32 @@ def chat(req: ChatRequest, request: Request):
 
     # ----- 1) follow-up avec clarify_ref
     if clarify_ref:
+        pend = _get_valid_pending(client_id)
+        if pend and pend.get("mode") == "ambiguity" and _ref_key(pend.get("q")) == _ref_key(clarify_ref):
+            candidates = pend.get("candidates") or []
+            pend_lang = (pend.get("language") or "").strip().lower()
+            if pend_lang:
+                lang_code = pend_lang
+            selected = _resolve_ambiguity_selection(pend, q)
+            if selected:
+                _PENDING_BY_CLIENT.pop(client_id, None)
+                return _respond_for_row(selected, lang_code, client_id)
+            _set_pending(
+                client_id,
+                None,
+                [],
+                lang_code,
+                mode="ambiguity",
+                extra={"question": pend.get("q") or clarify_ref, "candidates": candidates},
+            )
+            message = _build_ambiguity_message(candidates)
+            options = [(row.get("question") or "") for row in candidates]
+            return {
+                "answer": _ensure_language(message, lang_code),
+                "clarify": {"ref": pend.get("q") or clarify_ref, "options": options, "tips": []},
+                "citations": [],
+            }
+
         base_row = _find_row_by_ref(clarify_ref)
         if not base_row:
             return {"answer": _ensure_language("Ik kan je keuze niet aan de juiste vraag koppelen.", lang_code), "citations": []}
@@ -783,30 +1016,52 @@ def chat(req: ChatRequest, request: Request):
     if _looks_like_followup_choice(q):
         pend = _pop_valid_pending(client_id)
         if pend:
-            base_row = pend["row"]
-            labels = pend.get("labels") or []
             pend_lang = (pend.get("language") or "").strip().lower()
             if pend_lang:
                 lang_code = pend_lang
-            else:
-                _remember_language(base_row.get("question"), lang_code)
+            if pend.get("mode") == "ambiguity":
+                candidates = pend.get("candidates") or []
+                selected = _resolve_ambiguity_selection(pend, q)
+                if selected:
+                    return _respond_for_row(selected, lang_code, client_id)
+                _set_pending(
+                    client_id,
+                    None,
+                    [],
+                    lang_code,
+                    mode="ambiguity",
+                    extra={"question": pend.get("q") or q, "candidates": candidates},
+                )
+                message = _build_ambiguity_message(candidates)
+                options = [(row.get("question") or "") for row in candidates]
+                return {
+                    "answer": _ensure_language(message, lang_code),
+                    "clarify": {"ref": pend.get("q") or q, "options": options, "tips": []},
+                    "citations": [],
+                }
 
-            gen_key = _map_choice_to_genkey(q)
-            if gen_key:
-                chosen = _choose_gen_answer(base_row, gen_key)
-                if chosen:
-                    _PENDING_BY_CLIENT.pop(client_id, None)
-                    return {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+            base_row = pend.get("row")
+            if isinstance(base_row, dict):
+                labels = pend.get("labels") or []
+                if not pend_lang:
+                    _remember_language(base_row.get("question"), lang_code)
 
-            if labels:
-                label = _map_choice_to_key(q, labels)
-                if not label:
-                    matches = get_close_matches(q, labels, n=1, cutoff=0.45)
-                    label = matches[0] if matches else None
-                if label:
-                    _PENDING_BY_CLIENT.pop(client_id, None)
-                    answer = _build_answer_for_option(base_row, label)
-                    return {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+                gen_key = _map_choice_to_genkey(q)
+                if gen_key:
+                    chosen = _choose_gen_answer(base_row, gen_key)
+                    if chosen:
+                        _PENDING_BY_CLIENT.pop(client_id, None)
+                        return {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+
+                if labels:
+                    label = _map_choice_to_key(q, labels)
+                    if not label:
+                        matches = get_close_matches(q, labels, n=1, cutoff=0.45)
+                        label = matches[0] if matches else None
+                    if label:
+                        _PENDING_BY_CLIENT.pop(client_id, None)
+                        answer = _build_answer_for_option(base_row, label)
+                        return {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
 
             return {
                 "answer": _ensure_language("Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.", lang_code),
@@ -815,33 +1070,25 @@ def chat(req: ChatRequest, request: Request):
             }
 
     # ----- 2) lookup direct dans l'index
-    row = _find_row_by_question(q)
-    if row:
-        if row.get("follow_up"):
-            labels = _labels(row)
-            tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
-            _remember_language(row.get("question"), lang_code)
-            _set_pending(client_id, row, labels, lang_code)
-            intro = (row.get("answer") or row.get("antwoord") or "").strip()
-            follow_q = row.get("followup_q") or row.get("follow_up_question") or "Kunt u een keuze maken?"
-            parts = [intro] if intro else []
-            if follow_q:
-                parts.append(follow_q.strip())
-            if labels:
-                bullet_list = "\n".join(f"- {label}" for label in labels)
-                parts.append("Opties:\n" + bullet_list)
-            answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
-            return {
-                "answer": _ensure_language(answer_text, lang_code),
-                "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
-                "citations": _citations_for_row(row)
-            }
-
-        direct = (row.get("answer") or row.get("antwoord") or "").strip()
-        if direct:
-            _remember_language(row.get("question"), lang_code)
-            extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
-            return {"answer": _ensure_language(direct + extra_line, lang_code), "citations": _citations_for_row(row)}
+    matched_row, clarify_rows = _match_row_with_clarify(q)
+    if clarify_rows:
+        _set_pending(
+            client_id,
+            None,
+            [],
+            lang_code,
+            mode="ambiguity",
+            extra={"question": q, "candidates": clarify_rows},
+        )
+        options = [(row.get("question") or "") for row in clarify_rows]
+        message = _build_ambiguity_message(clarify_rows)
+        return {
+            "answer": _ensure_language(message, lang_code),
+            "clarify": {"ref": q, "options": options, "tips": []},
+            "citations": [],
+        }
+    if matched_row:
+        return _respond_for_row(matched_row, lang_code, client_id)
 
     # ----- 3) RAG fallback
     extra_gen = _parse_extra_gen(req.extra)
