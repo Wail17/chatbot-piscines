@@ -1,11 +1,14 @@
 # app/main.py
 from typing import List, Optional, Dict, Any, Set, Tuple
 import os, json, re, unicodedata, time
+from math import sqrt
+from threading import Lock
 from difflib import SequenceMatcher, get_close_matches
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from langchain_openai import OpenAIEmbeddings
 
 from .rag import (
     retrieve,
@@ -18,7 +21,7 @@ from .rag import (
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .config import (
-    CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR,
+    CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR, EMBEDDINGS_MODEL,
     # optionnel si tu veux un /health bavard:
     # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
 )
@@ -89,6 +92,10 @@ GEN_TIPS_NL = [
 _FAQ_PATH = os.path.join(STORE_DIR, "faq_index.json")
 _FAQ_FALLBACK_JSONL = os.path.join(DATA_DIR, "all", "faq", "FAQAI.jsonl")
 _FAQ: List[dict] = []
+_EMBED_UNSET = object()
+_FAQ_EMBED_LOCK: Lock = Lock()
+_FAQ_EMBEDDER: Optional[OpenAIEmbeddings] = None
+_FAQ_EMBED_DISABLED = False
 
 
 def _load_faq_from_store() -> List[dict]:
@@ -209,12 +216,22 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
     return rows
 
 
+def _reset_faq_embeddings() -> None:
+    global _FAQ_EMBEDDER, _FAQ_EMBED_DISABLED
+    with _FAQ_EMBED_LOCK:
+        _FAQ_EMBEDDER = None
+        _FAQ_EMBED_DISABLED = False
+
+
 def _reload_faq() -> Tuple[int, List[dict]]:
     data: List[dict] = _load_faq_from_store()
     if not data:
         data = _load_faq_from_jsonl(_FAQ_FALLBACK_JSONL)
     global _FAQ
     _FAQ = data
+    _reset_faq_embeddings()
+    for row in _FAQ:
+        row["_embedding"] = _EMBED_UNSET
     return (len(_FAQ), _FAQ)
 
 _reload_faq()
@@ -224,6 +241,7 @@ _reload_faq()
 # ---------------------------------------------------------------------
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 _MATCH_THRESHOLD = 0.68
+_SEMANTIC_MATCH_THRESHOLD = 0.78
 
 
 def _tokens(s: str) -> Set[str]:
@@ -347,6 +365,97 @@ def _similarity(a: str, b: str) -> float:
     blend_two = min(1.0, base + fuzzy_overlap * 0.65)
     return max(base, partial, overlap, fuzzy_overlap, blend_one, blend_two)
 
+
+def _disable_faq_embeddings() -> None:
+    global _FAQ_EMBEDDER, _FAQ_EMBED_DISABLED
+    if _FAQ_EMBED_LOCK.locked():
+        _FAQ_EMBEDDER = None
+        _FAQ_EMBED_DISABLED = True
+    else:
+        with _FAQ_EMBED_LOCK:
+            _FAQ_EMBEDDER = None
+            _FAQ_EMBED_DISABLED = True
+
+
+def _faq_embedder() -> OpenAIEmbeddings:
+    global _FAQ_EMBEDDER, _FAQ_EMBED_DISABLED
+    if _FAQ_EMBED_DISABLED:
+        raise RuntimeError("FAQ embeddings disabled")
+    with _FAQ_EMBED_LOCK:
+        if _FAQ_EMBEDDER is None:
+            try:
+                _FAQ_EMBEDDER = OpenAIEmbeddings(model=EMBEDDINGS_MODEL)
+            except Exception as exc:
+                _FAQ_EMBEDDER = None
+                _FAQ_EMBED_DISABLED = True
+                raise exc
+    return _FAQ_EMBEDDER
+
+
+def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(vec_a, vec_b))
+    denom = sqrt(sum(x * x for x in vec_a)) * sqrt(sum(y * y for y in vec_b))
+    if denom == 0.0:
+        return 0.0
+    return dot / denom
+
+
+def _ensure_row_embedding(row: dict, embedder: OpenAIEmbeddings) -> Optional[List[float]]:
+    cached = row.get("_embedding", _EMBED_UNSET)
+    if cached is not _EMBED_UNSET:
+        return cached
+    question = (row.get("question") or "").strip()
+    if not question:
+        row["_embedding"] = None
+        return None
+    with _FAQ_EMBED_LOCK:
+        cached = row.get("_embedding", _EMBED_UNSET)
+        if cached is not _EMBED_UNSET:
+            return cached
+        try:
+            vector = embedder.embed_query(question)
+        except Exception as exc:
+            row["_embedding"] = None
+            raise exc
+        row["_embedding"] = vector
+        return vector
+
+
+def _semantic_match_row(user_q: str) -> Optional[dict]:
+    global _FAQ_EMBED_DISABLED
+    if not _FAQ or not user_q or _FAQ_EMBED_DISABLED:
+        return None
+    try:
+        embedder = _faq_embedder()
+    except Exception:
+        return None
+    try:
+        query_vec = embedder.embed_query(user_q)
+    except Exception:
+        _disable_faq_embeddings()
+        return None
+
+    best_score = 0.0
+    best_row: Optional[dict] = None
+    for row in _FAQ:
+        try:
+            vec = _ensure_row_embedding(row, embedder)
+        except Exception:
+            _disable_faq_embeddings()
+            return None
+        if not vec:
+            continue
+        score = _cosine_similarity(query_vec, vec)
+        if score > best_score:
+            best_score = score
+            best_row = row
+
+    if best_score >= _SEMANTIC_MATCH_THRESHOLD:
+        return best_row
+    return None
+
 # ---------------------------------------------------------------------
 # Follow-up memory (fallback sans clarify_ref)
 # ---------------------------------------------------------------------
@@ -399,7 +508,9 @@ def _find_row_by_question(user_q: str) -> dict | None:
         sc = _similarity(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= _MATCH_THRESHOLD else None
+    if best[0] >= _MATCH_THRESHOLD:
+        return best[1]
+    return _semantic_match_row(user_q)
 
 def _find_row_by_ref(ref_q: str) -> dict | None:
     if not ref_q:
@@ -415,7 +526,9 @@ def _find_row_by_ref(ref_q: str) -> dict | None:
         sc = _similarity(uq, q)
         if sc > best[0]:
             best = (sc, row)
-    return best[1] if best[0] >= (_MATCH_THRESHOLD - 0.05) else None
+    if best[0] >= (_MATCH_THRESHOLD - 0.05):
+        return best[1]
+    return _semantic_match_row(ref_q)
 
 # options / gen
 _GEN_ALIASES: Dict[str, set] = {
