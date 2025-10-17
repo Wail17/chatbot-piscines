@@ -1085,10 +1085,14 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str) -> Dict[str, Any
     direct = (row.get("answer") or row.get("antwoord") or "").strip()
     if direct:
         extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
-        return {
+        response = {
             "answer": _ensure_language(direct + extra_line, lang_code),
             "citations": _citations_for_row(row),
         }
+        media = _extract_media_from_payload(row)
+        if media:
+            response["media"] = media
+        return response
     return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
 
 
@@ -1228,6 +1232,87 @@ def _choose_gen_answer(row: dict, gen_key: str) -> str | None:
         return str(row["answer_gen3"]).strip()
     return None
 
+_IMAGE_KEY_ALIASES: Set[str] = {
+    "foto",
+    "fotos",
+    "photo",
+    "photos",
+    "image",
+    "images",
+    "afbeelding",
+    "afbeeldingen",
+    "beeld",
+    "beelden",
+    "illustratie",
+    "illustraties",
+    "picture",
+    "pictures",
+}
+
+_URL_KEY_ALIASES: Set[str] = {"url", "href", "src", "link"}
+
+
+def _media_key_norm(key: Any) -> str:
+    norm = _normalize(str(key))
+    return norm.replace(" ", "")
+
+
+def _is_image_key(key: Any) -> bool:
+    norm = _media_key_norm(key)
+    if not norm:
+        return False
+    return any(alias in norm for alias in _IMAGE_KEY_ALIASES)
+
+
+def _collect_image_urls(value: Any) -> List[str]:
+    urls: List[str] = []
+    seen: Set[str] = set()
+
+    def _walk(val: Any) -> None:
+        if isinstance(val, str):
+            url = val.strip()
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+            return
+        if isinstance(val, dict):
+            for sub_key, sub_val in val.items():
+                sub_norm = _media_key_norm(sub_key)
+                if sub_norm in _URL_KEY_ALIASES or _is_image_key(sub_key):
+                    _walk(sub_val)
+            return
+        if isinstance(val, (list, tuple, set)):
+            for item in val:
+                _walk(item)
+
+    _walk(value)
+    return urls
+
+
+def _extract_media_from_payload(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    images: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+
+    def _add_from_value(val: Any) -> None:
+        for url in _collect_image_urls(val):
+            if url not in seen:
+                seen.add(url)
+                images.append({"type": "image", "url": url})
+
+    for key, value in payload.items():
+        if _is_image_key(key):
+            _add_from_value(value)
+            continue
+        key_norm = _media_key_norm(key)
+        if key_norm == "media" and isinstance(value, dict):
+            for sub_key, sub_val in value.items():
+                if _is_image_key(sub_key):
+                    _add_from_value(sub_val)
+    return {"images": images} if images else {}
+
+
 def _render_option_payload(payload: Any) -> str:
     if not isinstance(payload, dict):
         return str(payload)
@@ -1237,11 +1322,22 @@ def _render_option_payload(payload: Any) -> str:
         return ans + (("\n\nAanbeveling: " + rec) if rec else "")
     lines: List[str] = []
     for k, v in payload.items():
-        if v in (None, "", []): continue
+        if v in (None, "", []):
+            continue
+        if _is_image_key(k):
+            image_urls = _collect_image_urls(v)
+            if image_urls:
+                figures = "\n".join(
+                    f"<img src='{url}' alt='Afbeelding' style='max-width:100%;height:auto;' />"
+                    for url in image_urls
+                )
+                lines.append(f"Afbeeldingen:\n{figures}")
+            continue
         key = str(k).replace("_", " ").strip().capitalize()
         if isinstance(v, list):
             items = "\n".join([f"  • {str(x)}" for x in v if str(x).strip()])
-            lines.append(f"{key}:\n{items}")
+            if items:
+                lines.append(f"{key}:\n{items}")
         elif isinstance(v, dict):
             parts = [f"{kk}: {vv}" for kk, vv in v.items() if vv not in (None, "", [])]
             if parts:
@@ -1250,13 +1346,16 @@ def _render_option_payload(payload: Any) -> str:
             lines.append(f"{key}: {v}")
     return "\n".join(lines).strip()
 
-def _build_answer_for_option(row: dict, option_label: str) -> str:
+
+def _build_answer_for_option(row: dict, option_label: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     payload = (row.get("options") or {}).get(option_label)
     if payload is None:
-        return "Ik heb geen details gevonden voor deze keuze."
+        return "Ik heb geen details gevonden voor deze keuze.", None
     intro = (row.get("answer") or row.get("antwoord") or "").strip()
     body = _render_option_payload(payload)
-    return (intro + "\n\n" + body).strip() if intro else body
+    media = _extract_media_from_payload(payload)
+    text = (intro + "\n\n" + body).strip() if intro else body
+    return text, (media or None)
 
 def _citations_for_row(row: dict) -> List[dict]:
     return [{"title": row.get("question") or "FAQ", "source": row.get("source") or "", "page": None}]
@@ -1416,9 +1515,12 @@ def chat(req: ChatRequest, request: Request):
                 "answer": _ensure_language("Ik herken deze keuze niet. Kies één van: " + ", ".join(labels), lang_code),
                 "citations": _citations_for_row(base_row)
             }
-        answer = _build_answer_for_option(base_row, label)
+        answer, media = _build_answer_for_option(base_row, label)
         _PENDING_BY_CLIENT.pop(client_id, None)
-        return {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+        response = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+        if media:
+            response["media"] = media
+        return response
 
     # ----- follow-up zonder expliciete clarify_ref (pending memory)
     if _looks_like_followup_choice(q):
@@ -1468,8 +1570,11 @@ def chat(req: ChatRequest, request: Request):
                         label = matches[0] if matches else None
                     if label:
                         _PENDING_BY_CLIENT.pop(client_id, None)
-                        answer = _build_answer_for_option(base_row, label)
-                        return {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+                        answer, media = _build_answer_for_option(base_row, label)
+                        resp = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+                        if media:
+                            resp["media"] = media
+                        return resp
 
             return {
                 "answer": _ensure_language("Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.", lang_code),
