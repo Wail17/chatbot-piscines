@@ -1299,7 +1299,7 @@ def _extract_media_from_payload(payload: Any) -> Dict[str, Any]:
         for url in _collect_image_urls(val):
             if url not in seen:
                 seen.add(url)
-                images.append({"url": url})
+                images.append({"type": "image", "url": url})
 
     for key, value in payload.items():
         if _is_image_key(key):
@@ -1327,7 +1327,10 @@ def _render_option_payload(payload: Any) -> str:
         if _is_image_key(k):
             image_urls = _collect_image_urls(v)
             if image_urls:
-                figures = "\n".join(f"![Afbeelding]({url})" for url in image_urls)
+                figures = "\n".join(
+                    f"<img src='{url}' alt='Afbeelding' style='max-width:100%;height:auto;' />"
+                    for url in image_urls
+                )
                 lines.append(f"Afbeeldingen:\n{figures}")
             continue
         key = str(k).replace("_", " ").strip().capitalize()
