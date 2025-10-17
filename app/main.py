@@ -242,9 +242,38 @@ _reload_faq()
 _PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
 _MATCH_THRESHOLD = 0.68
 _SEMANTIC_MATCH_THRESHOLD = 0.78
-_AMBIGUITY_GAP = 0.07
+_SEMANTIC_TRIGGER = 0.63
+_CERTAINTY_THRESHOLD = 0.84
+_CERTAINTY_GAP = 0.1
+_AMBIGUITY_GAP = 0.06
 _AMBIGUITY_PEER_THRESHOLD = 0.55
-_AMBIGUITY_STOPWORDS = {"hoe", "ik", "kan", "een", "de", "het", "in", "op", "wat", "je", "met", "voor", "en", "of", "is", "moet", "mijn", "van", "aan", "te", "heb", "hebt", "wil", "wifipool", "apparaat"}
+_AMBIGUITY_STOPWORDS = {
+    "hoe",
+    "ik",
+    "kan",
+    "een",
+    "de",
+    "het",
+    "in",
+    "op",
+    "wat",
+    "je",
+    "met",
+    "voor",
+    "en",
+    "of",
+    "is",
+    "moet",
+    "mijn",
+    "van",
+    "aan",
+    "te",
+    "heb",
+    "hebt",
+    "wil",
+    "wifipool",
+    "apparaat",
+}
 
 
 _ORDINAL_ALIASES: Dict[str, int] = {
@@ -304,6 +333,253 @@ def _normalize(s: str | None) -> str:
     s = re.sub(r"\s+", " ", s)
     s = _PUNCT_RE.sub("", s)
     return s.strip()
+
+
+_SYNONYM_GROUPS: Dict[str, Set[str]] = {
+    "reset": {
+        "reset",
+        "hard reset",
+        "hardreset",
+        "herstart",
+        "herstarten",
+        "restart",
+        "opnieuw starten",
+        "factory reset",
+        "resetten",
+        "hard-reset",
+    },
+    "temperatuur": {
+        "temperatuur",
+        "temperatuursensor",
+        "temperatuurmeting",
+        "temperature",
+        "temp",
+        "thermosonde",
+        "thermometer",
+        "warmte",
+        "sonde",
+    },
+    "apparaat": {
+        "apparaat",
+        "toestel",
+        "device",
+        "appareil",
+        "gerät",
+        "equipment",
+    },
+    "doen": {
+        "doen",
+        "faire",
+        "machen",
+        "do",
+        "does",
+        "doit",
+    },
+    "niveau": {
+        "niveau",
+        "niveauregelaar",
+        "niveau meting",
+        "niveau regeling",
+        "waterniveau",
+        "vlotter",
+        "float",
+        "level",
+    },
+    "flow": {
+        "flow",
+        "debiet",
+        "debietmeter",
+        "flowswitch",
+        "flowmeting",
+        "flow sensor",
+        "flowmeter",
+    },
+    "pomp": {
+        "pomp",
+        "pompe",
+        "pump",
+        "circulatiepomp",
+        "circulation pump",
+    },
+    "sensor": {
+        "sensor",
+        "sonde",
+        "probe",
+        "meter",
+        "meting",
+    },
+    "koppelen": {
+        "koppelen",
+        "connect",
+        "connecter",
+        "verbinden",
+        "anschließen",
+        "linken",
+    },
+    "kalibratie": {
+        "kalibreren",
+        "kalibratie",
+        "calibratie",
+        "calibrate",
+        "calibration",
+    },
+    "wifi": {
+        "wifi",
+        "wi-fi",
+        "wlan",
+        "wireless",
+    },
+    "wifipool": {
+        "wifipool",
+        "wifi pool",
+        "wifi-pool",
+    },
+    "benisol": {
+        "benisol",
+        "zonder wifi",
+    },
+    "zout": {
+        "zout",
+        "zoutelektrolyse",
+        "electrolyse",
+        "chlorinator",
+        "salt",
+    },
+    "gen1": {
+        "gen1",
+        "gen 1",
+        "generation 1",
+        "g1",
+    },
+    "gen2": {
+        "gen2",
+        "gen 2",
+        "generation 2",
+        "g2",
+    },
+    "gen3": {
+        "gen3",
+        "gen 3",
+        "generation 3",
+        "g3",
+    },
+    "zwembad": {
+        "zwembad",
+        "pool",
+        "piscine",
+    },
+}
+
+
+def _build_synonym_map() -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for canonical, variants in _SYNONYM_GROUPS.items():
+        canonical_norm = _normalize(canonical)
+        if not canonical_norm:
+            continue
+        for term in variants:
+            alias_norm = _normalize(term)
+            if not alias_norm or alias_norm == canonical_norm:
+                continue
+            mapping[alias_norm] = canonical_norm
+        mapping.setdefault(canonical_norm, canonical_norm)
+    return mapping
+
+
+_SYNONYM_MAP: Dict[str, str] = _build_synonym_map()
+_CANONICAL_DISPLAY: Dict[str, str] = {}
+for canonical in _SYNONYM_GROUPS:
+    canon_norm = _normalize(canonical)
+    if canon_norm:
+        _CANONICAL_DISPLAY[canon_norm] = canonical
+_SYNONYM_CANONICALS: Set[str] = set(_CANONICAL_DISPLAY.keys())
+
+
+def _apply_synonyms(norm_text: str) -> str:
+    if not norm_text:
+        return norm_text
+    tokens = [tok for tok in norm_text.split(" ") if tok]
+    if not tokens:
+        return norm_text
+    padded = f" {norm_text} "
+    extras: List[str] = []
+    for alias, canonical in _SYNONYM_MAP.items():
+        if alias in tokens or f" {alias} " in padded:
+            extras.append(canonical)
+    if not extras:
+        return norm_text
+    for item in extras:
+        if item not in tokens:
+            tokens.append(item)
+    return " ".join(tokens)
+
+
+def _normalize_query(text: str) -> Tuple[str, str]:
+    base = _normalize(text)
+    return base, _apply_synonyms(base)
+
+
+def _canonical_tokens(text: str) -> Set[str]:
+    if not text:
+        return set()
+    return {tok for tok in text.split(" ") if tok in _SYNONYM_CANONICALS}
+
+
+def _row_norms(row: dict) -> Tuple[str, str]:
+    cached = row.get("_norm_pair")
+    if cached:
+        return cached
+    base = _normalize(row.get("question") or "")
+    parts: List[str] = [base]
+    options = row.get("options") or {}
+    if isinstance(options, dict):
+        for label in options.keys():
+            label_norm = _normalize(str(label))
+            if label_norm:
+                parts.append(label_norm)
+    augmented = _apply_synonyms(" ".join(p for p in parts if p))
+    row["_norm_pair"] = (base, augmented)
+    return row["_norm_pair"]
+
+
+def _semantic_query_text(user_q: str) -> str:
+    base = (user_q or "").strip()
+    _, augmented = _normalize_query(user_q)
+    extras: List[str] = []
+    seen: Set[str] = set()
+    if augmented:
+        for token in augmented.split(" "):
+            if token in _SYNONYM_CANONICALS and token not in seen:
+                display = _CANONICAL_DISPLAY.get(token, token)
+                if display and display.lower() not in base.lower():
+                    extras.append(display)
+                seen.add(token)
+    if extras:
+        base = (base + " " + " ".join(extras)).strip()
+    return base
+
+
+def _row_semantic_text(row: dict) -> str:
+    cached = row.get("_semantic_text")
+    if cached is not None:
+        return cached
+    parts: List[str] = [str(row.get("question") or "").strip()]
+    tags = row.get("tags")
+    if isinstance(tags, list):
+        parts.extend(str(t) for t in tags if str(t).strip())
+    options = row.get("options") or {}
+    if isinstance(options, dict):
+        parts.extend(str(label) for label in options.keys() if str(label).strip())
+    _, augmented = _row_norms(row)
+    if augmented:
+        for token in augmented.split(" "):
+            if token in _SYNONYM_CANONICALS:
+                display = _CANONICAL_DISPLAY.get(token, token)
+                if display:
+                    parts.append(display)
+    text = " ".join(part for part in parts if part).strip()
+    row["_semantic_text"] = text
+    return text
 
 
 _LANG_BY_REF: Dict[str, str] = {}
@@ -444,7 +720,7 @@ def _ensure_row_embedding(row: dict, embedder: OpenAIEmbeddings) -> Optional[Lis
     cached = row.get("_embedding", _EMBED_UNSET)
     if cached is not _EMBED_UNSET:
         return cached
-    question = (row.get("question") or "").strip()
+    question = _row_semantic_text(row)
     if not question:
         row["_embedding"] = None
         return None
@@ -471,7 +747,7 @@ def _semantic_scores(user_q: str) -> Dict[int, Tuple[dict, float]]:
     except Exception:
         return results
     try:
-        query_vec = embedder.embed_query(user_q)
+        query_vec = embedder.embed_query(_semantic_query_text(user_q))
     except Exception:
         _disable_faq_embeddings()
         return results
@@ -565,18 +841,32 @@ def _pop_valid_pending(client_id: str) -> dict | None:
 def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
     if not _FAQ:
         return (None, [])
-    uq = _normalize(user_q)
-    if not uq:
+    uq_base, uq_aug = _normalize_query(user_q)
+    if not uq_base:
         return (None, [])
     direct_matches: List[dict] = []
+    query_canon = _canonical_tokens(uq_aug)
     row_scores: Dict[int, Tuple[dict, float]] = {}
     for row in _FAQ:
-        q_norm = _normalize(row.get("question", ""))
-        if not q_norm:
+        base_norm, aug_norm = _row_norms(row)
+        if not base_norm and not aug_norm:
             continue
-        if uq == q_norm or (uq and (uq in q_norm or q_norm in uq)):
+        if base_norm and (
+            uq_base == base_norm or (uq_base and (uq_base in base_norm or base_norm in uq_base))
+        ):
             direct_matches.append(row)
-        score = _similarity(uq, q_norm)
+            continue
+        score = _similarity(uq_aug, aug_norm)
+        if score > 0.0 and query_canon:
+            row_canon = _canonical_tokens(aug_norm)
+            if not row_canon:
+                score *= 0.55
+            else:
+                coverage = len(query_canon & row_canon) / float(len(query_canon))
+                if coverage < 0.5:
+                    score *= 0.6
+                elif coverage < 0.8:
+                    score *= 0.8
         if score > 0.0:
             key = id(row)
             stored = row_scores.get(key)
@@ -586,43 +876,73 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
         if len(direct_matches) == 1:
             return (direct_matches[0], [])
         return (None, direct_matches[:4])
-    semantic_scores = _semantic_scores(user_q)
-    for key, (row, score) in semantic_scores.items():
-        stored = row_scores.get(key)
-        if stored:
-            if score > stored[1]:
+    need_semantic = not row_scores
+    if not need_semantic:
+        prelim = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
+        if not prelim or prelim[0][1] < _SEMANTIC_TRIGGER:
+            need_semantic = True
+    if need_semantic:
+        semantic_scores = _semantic_scores(user_q)
+        for key, (row, score) in semantic_scores.items():
+            stored = row_scores.get(key)
+            if stored:
+                if score > stored[1]:
+                    row_scores[key] = (row, score)
+            else:
                 row_scores[key] = (row, score)
-        else:
-            row_scores[key] = (row, score)
     if not row_scores:
         return (None, [])
     candidates = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
     candidates = [item for item in candidates if item[1] > 0.0]
     if not candidates:
         return (None, [])
-    top_score = candidates[0][1]
-    if len(candidates) >= 2:
-        top_norm = _normalize(candidates[0][0].get("question", ""))
-        top_tokens = {tok for tok in top_norm.split(" ") if tok and tok not in _AMBIGUITY_STOPWORDS}
-        ambiguous: List[Tuple[dict, float]] = []
-        for row, score in candidates:
-            if len(ambiguous) >= 4:
-                break
-            if score < _MATCH_THRESHOLD or (top_score - score) > _AMBIGUITY_GAP:
+    top_row, top_score = candidates[0]
+    second_score = candidates[1][1] if len(candidates) > 1 else 0.0
+    if top_score >= _CERTAINTY_THRESHOLD or (
+        top_score >= _MATCH_THRESHOLD and (top_score - second_score) >= _CERTAINTY_GAP
+    ):
+        return (top_row, [])
+    if top_score < _MATCH_THRESHOLD:
+        return (None, [])
+    if len(candidates) == 1:
+        return (top_row, [])
+    top_base, top_norm = _row_norms(top_row)
+    top_tokens = {
+        tok
+        for tok in (top_norm or top_base or "").split(" ")
+        if tok and tok not in _AMBIGUITY_STOPWORDS
+    }
+    top_canon = _canonical_tokens(top_norm)
+    ambiguous: List[Tuple[dict, float]] = []
+    for row, score in candidates:
+        if len(ambiguous) >= 4:
+            break
+        if score < _MATCH_THRESHOLD:
+            continue
+        if (top_score - score) > _AMBIGUITY_GAP:
+            continue
+        _, row_norm = _row_norms(row)
+        peer_sim = _similarity(top_norm, row_norm) if top_norm and row_norm else 0.0
+        peer_overlap = _token_overlap(top_norm or "", row_norm or "")
+        row_tokens = {
+            tok for tok in (row_norm or "").split(" ") if tok and tok not in _AMBIGUITY_STOPWORDS
+        }
+        if query_canon:
+            row_canon = _canonical_tokens(row_norm)
+            coverage = len(query_canon & row_canon) / float(len(query_canon)) if row_canon else 0.0
+            if coverage < 0.5:
                 continue
-            row_norm = _normalize(row.get("question", ""))
-            peer_sim = _similarity(top_norm, row_norm) if top_norm and row_norm else 0.0
-            peer_overlap = _token_overlap(top_norm, row_norm)
-            row_tokens = {tok for tok in row_norm.split(" ") if tok and tok not in _AMBIGUITY_STOPWORDS}
-            if top_tokens and row_tokens and not (top_tokens & row_tokens):
+        if top_canon:
+            row_canon = _canonical_tokens(row_norm)
+            if row_canon and not (top_canon & row_canon):
                 continue
-            if peer_sim >= _AMBIGUITY_PEER_THRESHOLD or peer_overlap >= _AMBIGUITY_PEER_THRESHOLD:
-                ambiguous.append((row, score))
-        if len(ambiguous) >= 2:
-            return (None, [row for row, _ in ambiguous])
-    if top_score >= _MATCH_THRESHOLD:
-        return (candidates[0][0], [])
-    return (None, [])
+        if top_tokens and row_tokens and not (top_tokens & row_tokens):
+            continue
+        if peer_sim >= _AMBIGUITY_PEER_THRESHOLD or peer_overlap >= _AMBIGUITY_PEER_THRESHOLD:
+            ambiguous.append((row, score))
+    if len(ambiguous) >= 2:
+        return (None, [row for row, _ in ambiguous])
+    return (top_row, [])
 
 def _build_ambiguity_message(rows: List[dict]) -> str:
     if not rows:
@@ -659,17 +979,18 @@ def _resolve_ambiguity_selection(pending: Dict[str, Any], choice_text: str) -> O
     idx = _parse_choice_index(choice_text, len(candidates))
     if idx:
         return candidates[idx - 1]
-    norm_choice = _normalize(choice_text)
+    _, norm_choice = _normalize_query(choice_text)
     if not norm_choice:
         return None
     best: Tuple[float, Optional[dict]] = (0.0, None)
     for candidate in candidates:
-        q_norm = _normalize(candidate.get("question") or "")
-        if not q_norm:
+        base_norm, aug_norm = _row_norms(candidate)
+        target_norm = aug_norm or base_norm
+        if not target_norm:
             continue
-        if _text_contains(norm_choice, q_norm) or _text_contains(q_norm, norm_choice):
+        if _text_contains(norm_choice, target_norm) or _text_contains(target_norm, norm_choice):
             return candidate
-        score = _similarity(norm_choice, q_norm)
+        score = _similarity(norm_choice, target_norm)
         if score > best[0]:
             best = (score, candidate)
     if best[0] >= 0.55:
@@ -714,15 +1035,16 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str) -> Dict[str, Any
 def _find_row_by_ref(ref_q: str) -> dict | None:
     if not ref_q:
         return None
-    uq = _normalize(ref_q)
+    uq_base, uq_aug = _normalize_query(ref_q)
     best = (0.0, None)
     for row in _FAQ:
-        q = _normalize(row.get("question", ""))
-        if not q:
+        base_norm, aug_norm = _row_norms(row)
+        target_norm = aug_norm or base_norm
+        if not target_norm:
             continue
-        if uq == q or uq in q or q in uq:
+        if base_norm and (uq_base == base_norm or uq_base in base_norm or base_norm in uq_base):
             return row
-        sc = _similarity(uq, q)
+        sc = _similarity(uq_aug, target_norm)
         if sc > best[0]:
             best = (sc, row)
     if best[0] >= (_MATCH_THRESHOLD - 0.05):
