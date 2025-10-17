@@ -17,6 +17,7 @@ from .rag import (
     extract_found_gens,
     detect_language_code,
     translate_answer,
+    translate_for_matching,
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
@@ -330,8 +331,8 @@ def _normalize(s: str | None) -> str:
     s = unicodedata.normalize("NFKD", (s or ""))
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     s = s.replace("\u00a0", " ").lower()
+    s = _PUNCT_RE.sub(" ", s)
     s = re.sub(r"\s+", " ", s)
-    s = _PUNCT_RE.sub("", s)
     return s.strip()
 
 
@@ -353,6 +354,19 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
         "rebooten",
         "herinitialiseren",
         "reinitialiseren",
+        "harder reset",
+        "harder herstart",
+        "hard resetten",
+        "reset complet",
+        "reinitialisation",
+        "réinitialisation",
+        "réinitialiser",
+        "reinitialiser",
+        "resetear",
+        "reiniciar",
+        "hard reset durchführen",
+        "hard reset ausführen",
+        "hard-reset durchführen",
     },
     "temperatuur": {
         "temperatuur",
@@ -459,6 +473,34 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
         "electrolyse",
         "chlorinator",
         "salt",
+        "saltelektrolyse",
+        "salzelektrolyse",
+        "salzelectrolyse",
+        "zoutelektrolysetoestel",
+        "zout elektrolyse",
+        "salt electrolysis",
+        "saltwater chlorinator",
+        "salt chlorinator",
+        "salzelektrolysegerät",
+        "salzwasser chlorinator",
+        "chlorelektrolyse",
+        "électrolyse",
+        "electrólisis",
+    },
+    "start": {
+        "start",
+        "starten",
+        "start niet",
+        "start niet op",
+        "gaat niet aan",
+        "gaat niet aanzetten",
+        "wil niet starten",
+        "wil niet opstarten",
+        "springt niet aan",
+        "startet nicht",
+        "geht nicht an",
+        "no arranca",
+        "ne démarre pas",
     },
     "gen1": {
         "gen1",
@@ -1437,6 +1479,19 @@ def chat(req: ChatRequest, request: Request):
 
     # ----- 2) lookup direct dans l'index
     matched_row, clarify_rows = _match_row_with_clarify(q)
+    translated_query = None
+    if not matched_row and not clarify_rows and lang_code not in {"", "nl"}:
+        try:
+            translated_query = translate_for_matching(q, lang_code)
+        except Exception:
+            translated_query = None
+        if translated_query:
+            if _normalize(translated_query) != _normalize(q):
+                alt_row, alt_clarify = _match_row_with_clarify(translated_query)
+                if alt_clarify:
+                    clarify_rows = alt_clarify
+                elif alt_row:
+                    matched_row = alt_row
     if clarify_rows:
         _set_pending(
             client_id,

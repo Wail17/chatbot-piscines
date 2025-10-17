@@ -85,6 +85,16 @@ def detect_language_code(text: str) -> str:
     return ""
 
 
+@lru_cache(maxsize=256)
+def _cached_translation(prompt: str) -> str:
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 def translate_answer(text: str, target_code: str) -> str:
     if not text:
         return text
@@ -98,12 +108,27 @@ def translate_answer(text: str, target_code: str) -> str:
             "keep product names, option labels, and URLs exactly as they appear. Respond with the translation only.\n\n"
             f"Reply:\n{text}"
         )
-        resp = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+        translated = _cached_translation(prompt)
+        return translated or text
+    except Exception:
+        return text
+
+
+@lru_cache(maxsize=256)
+def translate_for_matching(text: str, source_code: str, target_code: str = "nl") -> str:
+    if not text:
+        return text
+    src = _normalize_lang_code(source_code)
+    tgt = _normalize_lang_code(target_code)
+    if not src or not tgt or src == tgt:
+        return text
+    try:
+        prompt = (
+            "Vertaal de volgende klantenvraag naar het Nederlands zodat een FAQ-zoekmachine met Nederlandse trefwoorden "
+            "hem kan begrijpen. Behoud eigennamen en merknamen. Geef alleen de vertaling.\n\n"
+            f"Vraag:\n{text}"
         )
-        translated = (resp.choices[0].message.content or "").strip()
+        translated = _cached_translation(prompt)
         return translated or text
     except Exception:
         return text
