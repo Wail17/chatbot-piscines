@@ -339,7 +339,9 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
     "reset": {
         "reset",
         "hard reset",
+        "harde reset",
         "hardreset",
+        "harde herstart",
         "herstart",
         "herstarten",
         "restart",
@@ -347,6 +349,10 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
         "factory reset",
         "resetten",
         "hard-reset",
+        "reboot",
+        "rebooten",
+        "herinitialiseren",
+        "reinitialiseren",
     },
     "temperatuur": {
         "temperatuur",
@@ -374,6 +380,15 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
         "do",
         "does",
         "doit",
+        "uitvoeren",
+        "uit te voeren",
+        "uitvoering",
+        "uitvoeren van",
+        "voer",
+        "voeren",
+        "uitvoer",
+        "perform",
+        "performer",
     },
     "niveau": {
         "niveau",
@@ -862,11 +877,14 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
             if not row_canon:
                 score *= 0.55
             else:
-                coverage = len(query_canon & row_canon) / float(len(query_canon))
-                if coverage < 0.5:
-                    score *= 0.6
-                elif coverage < 0.8:
-                    score *= 0.8
+                overlap = len(query_canon & row_canon)
+                coverage = overlap / float(len(query_canon))
+                if coverage < 0.4:
+                    score *= 0.55
+                elif coverage < 0.65:
+                    score *= 0.75
+                else:
+                    score = min(1.0, score + min(1.0, coverage) * 0.25)
         if score > 0.0:
             key = id(row)
             stored = row_scores.get(key)
@@ -1108,8 +1126,34 @@ def _map_choice_to_key(choice: str, option_labels: List[str]) -> str | None:
     return None
 
 def _looks_like_followup_choice(text: str) -> bool:
+    raw = (text or "").strip()
     t = _normalize(text)
     if not t:
+        return False
+    if "?" in raw:
+        return False
+    words = [tok for tok in t.split(" ") if tok]
+    if len(words) > 8:
+        return False
+    question_words = {
+        "hoe",
+        "wat",
+        "waarom",
+        "waar",
+        "wanneer",
+        "welke",
+        "how",
+        "what",
+        "why",
+        "where",
+        "when",
+        "quel",
+        "quels",
+        "quelle",
+        "quand",
+        "comment",
+    }
+    if any(word in question_words for word in words):
         return False
     if any(ch.isdigit() for ch in t):
         return True
