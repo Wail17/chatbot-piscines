@@ -2,6 +2,7 @@
 from typing import List, Tuple, Optional, Set
 import logging
 import re
+from functools import lru_cache
 
 from openai import OpenAI
 from langchain_openai import OpenAIEmbeddings
@@ -20,6 +21,117 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 client = OpenAI()
+
+
+_LANG_NAME_BY_CODE = {
+    "nl": "Dutch",
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "pl": "Polish",
+    "ro": "Romanian",
+    "da": "Danish",
+    "sv": "Swedish",
+    "fi": "Finnish",
+    "cs": "Czech",
+    "sk": "Slovak",
+    "hu": "Hungarian",
+    "tr": "Turkish",
+    "el": "Greek",
+    "et": "Estonian",
+    "lv": "Latvian",
+    "lt": "Lithuanian",
+    "sl": "Slovenian",
+}
+
+
+def _normalize_lang_code(code: str | None) -> str:
+    if not code:
+        return ""
+    code = code.strip().lower()
+    if not code:
+        return ""
+    return code[:2]
+
+
+@lru_cache(maxsize=256)
+def detect_language_code(text: str) -> str:
+    snippet = (text or "").strip()
+    if not snippet:
+        return ""
+    snippet = snippet[:400]
+    try:
+        prompt = (
+            "Identify the dominant ISO 639-1 language code for the user's text below. "
+            "Reply with the two-letter code only. If unsure, guess the most likely language.\n\n"
+            f"Text:\n{snippet}"
+        )
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        raw = resp.choices[0].message.content.strip().lower()
+        if re.fullmatch(r"[a-z]{2}", raw):
+            return raw
+        match = re.search(r"([a-z]{2})", raw)
+        if match:
+            return match.group(1)
+    except Exception:
+        return ""
+    return ""
+
+
+@lru_cache(maxsize=256)
+def _cached_translation(prompt: str) -> str:
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
+def translate_answer(text: str, target_code: str) -> str:
+    if not text:
+        return text
+    code = _normalize_lang_code(target_code)
+    if not code or code == "nl":
+        return text
+    lang_name = _LANG_NAME_BY_CODE.get(code, code)
+    try:
+        prompt = (
+            f"Translate the following support reply to {lang_name}. Preserve the formatting, bullet lists, numbering, and "
+            "keep product names, option labels, and URLs exactly as they appear. Respond with the translation only.\n\n"
+            f"Reply:\n{text}"
+        )
+        translated = _cached_translation(prompt)
+        return translated or text
+    except Exception:
+        return text
+
+
+@lru_cache(maxsize=256)
+def translate_for_matching(text: str, source_code: str, target_code: str = "nl") -> str:
+    if not text:
+        return text
+    src = _normalize_lang_code(source_code)
+    tgt = _normalize_lang_code(target_code)
+    if not src or not tgt or src == tgt:
+        return text
+    try:
+        prompt = (
+            "Vertaal de volgende klantenvraag naar het Nederlands zodat een FAQ-zoekmachine met Nederlandse trefwoorden "
+            "hem kan begrijpen. Behoud eigennamen en merknamen. Geef alleen de vertaling.\n\n"
+            f"Vraag:\n{text}"
+        )
+        translated = _cached_translation(prompt)
+        return translated or text
+    except Exception:
+        return text
 
 
 def _get_vs() -> Chroma:
