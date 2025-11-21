@@ -921,8 +921,34 @@ def _get_similar_questions(
     try:
         # Get semantic scores for all FAQ entries
         scores = _semantic_scores(user_q)
+
+        # Fallback: if no scores (e.g., OpenAI unavailable), pick random FAQ questions
         if not scores:
-            return []
+            import random
+            suggestions = []
+            seen_questions = set()
+
+            # Get current question to exclude it
+            if current_row:
+                current_question = _get_question_in_language(current_row, lang_code)
+                if current_question:
+                    seen_questions.add(current_question.strip().lower())
+
+            # Pick random questions from FAQ
+            available_rows = [row for row in _FAQ if id(row) != (id(current_row) if current_row else None)]
+            random.shuffle(available_rows)
+
+            for row in available_rows:
+                question = _get_question_in_language(row, lang_code)
+                if question:
+                    question_normalized = question.strip().lower()
+                    if question_normalized not in seen_questions:
+                        suggestions.append(question)
+                        seen_questions.add(question_normalized)
+                        if len(suggestions) >= max_count:
+                            break
+
+            return suggestions[:max_count]
 
         # Get current row ID to exclude it
         current_id = id(current_row) if current_row else None
@@ -986,13 +1012,55 @@ def _get_similar_questions(
                             suggestions.append(question)
                             seen_questions.add(question_normalized)
 
+        # Final fallback: if still not enough suggestions, add random ones
+        if len(suggestions) < min_count:
+            import random
+            available_rows = [row for row_id, (row, _) in scores.items() if row_id != current_id]
+            if not available_rows:
+                available_rows = [row for row in _FAQ if id(row) != current_id]
+            random.shuffle(available_rows)
+
+            for row in available_rows:
+                if len(suggestions) >= max_count:
+                    break
+                question = _get_question_in_language(row, lang_code)
+                if question:
+                    question_normalized = question.strip().lower()
+                    if question_normalized not in seen_questions:
+                        suggestions.append(question)
+                        seen_questions.add(question_normalized)
+
         return suggestions[:max_count]
 
     except Exception as exc:
         # Log error but don't fail the whole response
         import logging
         logging.warning(f"Error generating question suggestions: {exc}")
-        return []
+        # Final fallback: return random questions
+        try:
+            import random
+            suggestions = []
+            seen_questions = set()
+
+            if current_row:
+                current_question = _get_question_in_language(current_row, lang_code)
+                if current_question:
+                    seen_questions.add(current_question.strip().lower())
+
+            available_rows = [row for row in _FAQ if id(row) != (id(current_row) if current_row else None)]
+            random.shuffle(available_rows)
+
+            for row in available_rows[:max_count]:
+                question = _get_question_in_language(row, lang_code)
+                if question:
+                    question_normalized = question.strip().lower()
+                    if question_normalized not in seen_questions:
+                        suggestions.append(question)
+                        seen_questions.add(question_normalized)
+
+            return suggestions[:max_count]
+        except:
+            return []
 
 # ---------------------------------------------------------------------
 # Follow-up memory (fallback sans clarify_ref)
