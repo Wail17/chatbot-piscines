@@ -839,6 +839,38 @@ def _semantic_match_row(user_q: str) -> Optional[dict]:
 # ---------------------------------------------------------------------
 # Question suggestions based on semantic similarity
 # ---------------------------------------------------------------------
+def _add_suggestions_to_response(
+    response: Dict[str, Any],
+    user_q: str,
+    lang_code: str,
+    current_row: Optional[dict] = None
+) -> Dict[str, Any]:
+    """
+    Helper to add suggestions to any response if they don't exist yet.
+    This ensures ALL responses include suggestions to reduce fault rate.
+
+    Args:
+        response: The response dict to add suggestions to
+        user_q: The user's question
+        lang_code: Language code for suggestions
+        current_row: The current FAQ row (to exclude from suggestions)
+
+    Returns:
+        The response dict with suggestions added (if possible)
+    """
+    if not user_q or "suggestions" in response:
+        return response
+
+    try:
+        suggestions = _get_similar_questions(current_row, user_q, lang_code)
+        if suggestions:
+            response["suggestions"] = suggestions
+    except Exception:
+        pass
+
+    return response
+
+
 def _get_question_in_language(row: dict, lang_code: str) -> str:
     """Extract question text in the appropriate language."""
     if not row:
@@ -873,6 +905,7 @@ def _get_similar_questions(
 ) -> List[str]:
     """
     Generate 3-6 similar question suggestions based on semantic similarity.
+    ALWAYS returns between min_count and max_count suggestions (unless FAQ has fewer entries).
 
     Args:
         current_row: The matched FAQ row
@@ -883,7 +916,7 @@ def _get_similar_questions(
         min_similarity: Minimum similarity score threshold (default 0.50)
 
     Returns:
-        List of similar questions in the appropriate language
+        List of similar questions in the appropriate language (3-6 items)
     """
     try:
         # Get semantic scores for all FAQ entries
@@ -892,27 +925,67 @@ def _get_similar_questions(
             return []
 
         # Get current row ID to exclude it
-        current_id = id(current_row)
+        current_id = id(current_row) if current_row else None
 
-        # Filter and sort by score, excluding current question
-        candidates = [
-            (row, score)
-            for row_id, (row, score) in scores.items()
-            if row_id != current_id and score >= min_similarity
-        ]
+        # Try with progressively lower thresholds to ensure we get enough suggestions
+        thresholds = [min_similarity, 0.40, 0.30, 0.20, 0.10]
+        candidates = []
 
-        # Sort by score descending
-        candidates.sort(key=lambda x: x[1], reverse=True)
+        for threshold in thresholds:
+            # Filter and sort by score, excluding current question
+            candidates = [
+                (row, score)
+                for row_id, (row, score) in scores.items()
+                if row_id != current_id and score >= threshold
+            ]
+
+            # Sort by score descending
+            candidates.sort(key=lambda x: x[1], reverse=True)
+
+            # If we have enough candidates, stop lowering threshold
+            if len(candidates) >= min_count:
+                break
 
         # Extract questions in the right language
         suggestions = []
-        for row, score in candidates[:max_count]:
-            question = _get_question_in_language(row, lang_code)
-            if question and question not in suggestions:
-                suggestions.append(question)
+        seen_questions = set()
 
-        # Return between min_count and max_count suggestions
-        # If we have fewer than min_count, return what we have
+        # Get current question to exclude it from suggestions
+        if current_row:
+            current_question = _get_question_in_language(current_row, lang_code)
+            if current_question:
+                seen_questions.add(current_question.strip().lower())
+
+        for row, score in candidates[:max_count * 2]:  # Check more to handle duplicates
+            question = _get_question_in_language(row, lang_code)
+            if question:
+                question_normalized = question.strip().lower()
+                if question_normalized not in seen_questions:
+                    suggestions.append(question)
+                    seen_questions.add(question_normalized)
+
+                    # Stop once we have enough
+                    if len(suggestions) >= max_count:
+                        break
+
+        # Ensure we have at least min_count suggestions (if possible)
+        # If we have fewer, try getting from different categories
+        if len(suggestions) < min_count and current_row:
+            category = current_row.get("category", "")
+            # Get suggestions from same category
+            for row_id, (row, score) in scores.items():
+                if len(suggestions) >= max_count:
+                    break
+                if row_id == current_id:
+                    continue
+                if category and row.get("category") == category:
+                    question = _get_question_in_language(row, lang_code)
+                    if question:
+                        question_normalized = question.strip().lower()
+                        if question_normalized not in seen_questions:
+                            suggestions.append(question)
+                            seen_questions.add(question_normalized)
+
         return suggestions[:max_count]
 
     except Exception as exc:
@@ -1145,10 +1218,18 @@ def _resolve_ambiguity_selection(pending: Dict[str, Any], choice_text: str) -> O
 
 def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = "") -> Dict[str, Any]:
     if not isinstance(row, dict):
-        return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+        # Even for errors, provide suggestions based on semantic similarity
+        response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+        if user_q:
+            suggestions = _get_similar_questions(None, user_q, lang_code)
+            if suggestions:
+                response["suggestions"] = suggestions
+        return response
+
     question_ref = row.get("question")
     if question_ref:
         _remember_language(question_ref, lang_code)
+
     if row.get("follow_up"):
         labels = _labels(row)
         tips: List[str] = GEN_TIPS_NL if any("gen" in _normalize(k) for k in labels) else []
@@ -1162,11 +1243,18 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
             bullet_list = "\n".join(f"- {label}" for label in labels)
             parts.append("Opties:\n" + bullet_list)
         answer_text = "\n\n".join([p for p in parts if p]).strip() or follow_q
-        return {
+        response = {
             "answer": _ensure_language(answer_text, lang_code),
             "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
             "citations": _citations_for_row(row),
         }
+        # Add suggestions even for follow-up questions
+        if user_q:
+            suggestions = _get_similar_questions(row, user_q, lang_code)
+            if suggestions:
+                response["suggestions"] = suggestions
+        return response
+
     direct = (row.get("answer") or row.get("antwoord") or "").strip()
     if direct:
         extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
@@ -1178,14 +1266,22 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
         if media:
             response["media"] = media
 
-        # Generate similar question suggestions
+        # ALWAYS generate similar question suggestions (never return without them)
+        # This helps reduce fault rate by guiding users to related questions
         if user_q:
             suggestions = _get_similar_questions(row, user_q, lang_code)
             if suggestions:
                 response["suggestions"] = suggestions
 
         return response
-    return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+
+    # No answer found - still provide suggestions
+    response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+    if user_q:
+        suggestions = _get_similar_questions(row, user_q, lang_code)
+        if suggestions:
+            response["suggestions"] = suggestions
+    return response
 
 
 def _find_row_by_ref(ref_q: str) -> dict | None:
@@ -1546,7 +1642,8 @@ def chat(req: ChatRequest, request: Request):
         ans = None
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
-        return {"answer": _ensure_language(ans, lang_code), "citations": [cite], "used_chunks": used}
+        response = {"answer": _ensure_language(ans, lang_code), "citations": [cite], "used_chunks": used}
+        return _add_suggestions_to_response(response, q, lang_code, None)
 
     # ----- 1) follow-up avec clarify_ref
     if clarify_ref:
@@ -1571,15 +1668,17 @@ def chat(req: ChatRequest, request: Request):
             )
             message = _build_ambiguity_message(candidates)
             options = [(row.get("question") or "") for row in candidates]
-            return {
+            response = {
                 "answer": _ensure_language(message, lang_code),
                 "clarify": {"ref": pend.get("q") or clarify_ref, "options": options, "tips": []},
                 "citations": [],
             }
+            return _add_suggestions_to_response(response, q, lang_code, None)
 
         base_row = _find_row_by_ref(clarify_ref)
         if not base_row:
-            return {"answer": _ensure_language("Ik kan je keuze niet aan de juiste vraag koppelen.", lang_code), "citations": []}
+            response = {"answer": _ensure_language("Ik kan je keuze niet aan de juiste vraag koppelen.", lang_code), "citations": []}
+            return _add_suggestions_to_response(response, q, lang_code, None)
 
         row_lang = _language_for_ref(base_row.get("question"))
         if row_lang:
@@ -1592,28 +1691,32 @@ def chat(req: ChatRequest, request: Request):
             chosen = _choose_gen_answer(base_row, gen_key)
             if chosen:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                return {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+                response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+                return _add_suggestions_to_response(response, q, lang_code, base_row)
 
         labels = _labels(base_row)
         if not labels:
             direct = (base_row.get("answer") or base_row.get("antwoord") or "").strip()
             if direct:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                return {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row)}
-            return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+                response = {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row)}
+                return _add_suggestions_to_response(response, q, lang_code, base_row)
+            response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+            return _add_suggestions_to_response(response, q, lang_code, base_row)
 
         label = _map_choice_to_key(q, labels)
         if not label:
-            return {
+            response = {
                 "answer": _ensure_language("Ik herken deze keuze niet. Kies één van: " + ", ".join(labels), lang_code),
                 "citations": _citations_for_row(base_row)
             }
+            return _add_suggestions_to_response(response, q, lang_code, base_row)
         answer, media = _build_answer_for_option(base_row, label)
         _PENDING_BY_CLIENT.pop(client_id, None)
         response = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
         if media:
             response["media"] = media
-        return response
+        return _add_suggestions_to_response(response, q, lang_code, base_row)
 
     # ----- follow-up zonder expliciete clarify_ref (pending memory)
     if _looks_like_followup_choice(q):
@@ -1638,11 +1741,12 @@ def chat(req: ChatRequest, request: Request):
                 )
                 message = _build_ambiguity_message(candidates)
                 options = [(row.get("question") or "") for row in candidates]
-                return {
+                response = {
                     "answer": _ensure_language(message, lang_code),
                     "clarify": {"ref": pend.get("q") or q, "options": options, "tips": []},
                     "citations": [],
                 }
+                return _add_suggestions_to_response(response, q, lang_code, None)
 
             base_row = pend.get("row")
             if isinstance(base_row, dict):
@@ -1655,7 +1759,8 @@ def chat(req: ChatRequest, request: Request):
                     chosen = _choose_gen_answer(base_row, gen_key)
                     if chosen:
                         _PENDING_BY_CLIENT.pop(client_id, None)
-                        return {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+                        response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+                        return _add_suggestions_to_response(response, q, lang_code, base_row)
 
                 if labels:
                     label = _map_choice_to_key(q, labels)
@@ -1668,13 +1773,14 @@ def chat(req: ChatRequest, request: Request):
                         resp = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
                         if media:
                             resp["media"] = media
-                        return resp
+                        return _add_suggestions_to_response(resp, q, lang_code, base_row)
 
-            return {
+            response = {
                 "answer": _ensure_language("Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.", lang_code),
                 "need_ref": True,
                 "citations": [],
             }
+            return _add_suggestions_to_response(response, q, lang_code, None)
 
     # ----- 2) lookup direct dans l'index
     matched_row, clarify_rows = _match_row_with_clarify(q)
@@ -1702,11 +1808,12 @@ def chat(req: ChatRequest, request: Request):
         )
         options = [(row.get("question") or "") for row in clarify_rows]
         message = _build_ambiguity_message(clarify_rows)
-        return {
+        response = {
             "answer": _ensure_language(message, lang_code),
             "clarify": {"ref": q, "options": options, "tips": []},
             "citations": [],
         }
+        return _add_suggestions_to_response(response, q, lang_code, None)
     if matched_row:
         return _respond_for_row(matched_row, lang_code, client_id, q)
 
@@ -1737,23 +1844,28 @@ def chat(req: ChatRequest, request: Request):
         fake_row = {"question": q, "options": {o: {} for o in options}}
         _remember_language(q, lang_code)
         _set_pending(client_id, fake_row, options, lang_code)
-        return {
+        response = {
             "answer": _ensure_language("Hebt u een Gen 1 of een Gen 2 apparaat?", lang_code),
             "clarify": {"ref": q, "options": options, "tips": GEN_TIPS_NL},
             "citations": [],
         }
+        return _add_suggestions_to_response(response, q, lang_code, None)
 
     if not docs:
-        return {
+        response = {
             "answer": _ensure_language("Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?", lang_code),
             "citations": [],
         }
+        return _add_suggestions_to_response(response, q, lang_code, None)
 
     try:
         answer, citations = generate_answer(q, docs)
     except Exception:
-        return {
+        response = {
             "answer": _ensure_language("Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?", lang_code),
             "citations": [],
         }
-    return {"answer": answer, "citations": citations}
+        return _add_suggestions_to_response(response, q, lang_code, None)
+
+    response = {"answer": answer, "citations": citations}
+    return _add_suggestions_to_response(response, q, lang_code, None)
