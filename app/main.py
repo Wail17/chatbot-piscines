@@ -837,6 +837,91 @@ def _semantic_match_row(user_q: str) -> Optional[dict]:
     return None
 
 # ---------------------------------------------------------------------
+# Question suggestions based on semantic similarity
+# ---------------------------------------------------------------------
+def _get_question_in_language(row: dict, lang_code: str) -> str:
+    """Extract question text in the appropriate language."""
+    if not row:
+        return ""
+
+    # Map language codes to field names
+    lang_fields = {
+        "fr": "FRQuestion",
+        "de": "DEFrage",
+        "en": "ENQuestion",
+        "nl": "Vraag"
+    }
+
+    # Try to get question in requested language
+    field = lang_fields.get(lang_code, "Vraag")
+    question = (row.get(field) or "").strip()
+
+    # Fall back to main question field or "Vraag"
+    if not question:
+        question = (row.get("question") or row.get("Vraag") or "").strip()
+
+    return question
+
+
+def _get_similar_questions(
+    current_row: dict,
+    user_q: str,
+    lang_code: str,
+    min_count: int = 3,
+    max_count: int = 6,
+    min_similarity: float = 0.50
+) -> List[str]:
+    """
+    Generate 3-6 similar question suggestions based on semantic similarity.
+
+    Args:
+        current_row: The matched FAQ row
+        user_q: The original user question
+        lang_code: Language code for translation
+        min_count: Minimum number of suggestions (default 3)
+        max_count: Maximum number of suggestions (default 6)
+        min_similarity: Minimum similarity score threshold (default 0.50)
+
+    Returns:
+        List of similar questions in the appropriate language
+    """
+    try:
+        # Get semantic scores for all FAQ entries
+        scores = _semantic_scores(user_q)
+        if not scores:
+            return []
+
+        # Get current row ID to exclude it
+        current_id = id(current_row)
+
+        # Filter and sort by score, excluding current question
+        candidates = [
+            (row, score)
+            for row_id, (row, score) in scores.items()
+            if row_id != current_id and score >= min_similarity
+        ]
+
+        # Sort by score descending
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        # Extract questions in the right language
+        suggestions = []
+        for row, score in candidates[:max_count]:
+            question = _get_question_in_language(row, lang_code)
+            if question and question not in suggestions:
+                suggestions.append(question)
+
+        # Return between min_count and max_count suggestions
+        # If we have fewer than min_count, return what we have
+        return suggestions[:max_count]
+
+    except Exception as exc:
+        # Log error but don't fail the whole response
+        import logging
+        logging.warning(f"Error generating question suggestions: {exc}")
+        return []
+
+# ---------------------------------------------------------------------
 # Follow-up memory (fallback sans clarify_ref)
 # ---------------------------------------------------------------------
 # { client_id: {"q": base_question, "labels": [...], "ts": epoch, "row": row_dict} }
@@ -1058,7 +1143,7 @@ def _resolve_ambiguity_selection(pending: Dict[str, Any], choice_text: str) -> O
     return None
 
 
-def _respond_for_row(row: dict, lang_code: str, client_id: str) -> Dict[str, Any]:
+def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = "") -> Dict[str, Any]:
     if not isinstance(row, dict):
         return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
     question_ref = row.get("question")
@@ -1092,6 +1177,13 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str) -> Dict[str, Any
         media = _extract_media_from_payload(row)
         if media:
             response["media"] = media
+
+        # Generate similar question suggestions
+        if user_q:
+            suggestions = _get_similar_questions(row, user_q, lang_code)
+            if suggestions:
+                response["suggestions"] = suggestions
+
         return response
     return {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
 
@@ -1467,7 +1559,8 @@ def chat(req: ChatRequest, request: Request):
             selected = _resolve_ambiguity_selection(pend, q)
             if selected:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                return _respond_for_row(selected, lang_code, client_id)
+                original_q = pend.get("q") or q
+                return _respond_for_row(selected, lang_code, client_id, original_q)
             _set_pending(
                 client_id,
                 None,
@@ -1533,7 +1626,8 @@ def chat(req: ChatRequest, request: Request):
                 candidates = pend.get("candidates") or []
                 selected = _resolve_ambiguity_selection(pend, q)
                 if selected:
-                    return _respond_for_row(selected, lang_code, client_id)
+                    original_q = pend.get("q") or q
+                    return _respond_for_row(selected, lang_code, client_id, original_q)
                 _set_pending(
                     client_id,
                     None,
@@ -1614,7 +1708,7 @@ def chat(req: ChatRequest, request: Request):
             "citations": [],
         }
     if matched_row:
-        return _respond_for_row(matched_row, lang_code, client_id)
+        return _respond_for_row(matched_row, lang_code, client_id, q)
 
     # ----- 3) RAG fallback
     extra_gen = _parse_extra_gen(req.extra)
