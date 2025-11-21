@@ -2,6 +2,7 @@
 from typing import List, Tuple, Optional, Set
 import logging
 import re
+import os
 from functools import lru_cache
 
 from openai import OpenAI
@@ -20,7 +21,18 @@ from .config import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-client = OpenAI()
+# Initialisation robuste du client OpenAI
+_api_key = os.environ.get("OPENAI_API_KEY")
+if _api_key:
+    try:
+        client = OpenAI(api_key=_api_key)
+        logger.info("OpenAI client initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize OpenAI client: {e}")
+        client = None
+else:
+    logger.warning("WARNING: Missing OPENAI_API_KEY - OpenAI features will be disabled")
+    client = None
 
 
 _LANG_NAME_BY_CODE = {
@@ -63,6 +75,12 @@ def detect_language_code(text: str) -> str:
     if not snippet:
         return ""
     snippet = snippet[:400]
+
+    # Fallback si client OpenAI non disponible
+    if client is None:
+        logger.debug("OpenAI client not available for language detection, returning empty string")
+        return ""
+
     try:
         prompt = (
             "Identify the dominant ISO 639-1 language code for the user's text below. "
@@ -80,19 +98,29 @@ def detect_language_code(text: str) -> str:
         match = re.search(r"([a-z]{2})", raw)
         if match:
             return match.group(1)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Language detection failed: {e}")
         return ""
     return ""
 
 
 @lru_cache(maxsize=256)
 def _cached_translation(prompt: str) -> str:
-    resp = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-    )
-    return (resp.choices[0].message.content or "").strip()
+    # Fallback si client OpenAI non disponible
+    if client is None:
+        logger.debug("OpenAI client not available for translation")
+        return ""
+
+    try:
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning(f"Translation failed: {e}")
+        return ""
 
 
 def translate_answer(text: str, target_code: str) -> str:
@@ -242,6 +270,11 @@ def extract_found_gens(docs) -> Set[str]:
 # ---------- Query expansion ----------
 def _expand_queries_with_llm(question: str, n: int = 3) -> list:
     """Génère n reformulations courtes de la question."""
+    # Fallback si client OpenAI non disponible
+    if client is None:
+        logger.debug("OpenAI client not available for query expansion")
+        return []
+
     try:
         prompt = (
             "Reformule la question ci-dessous en variantes de recherche courtes et précises. "
@@ -255,7 +288,8 @@ def _expand_queries_with_llm(question: str, n: int = 3) -> list:
         text = resp.choices[0].message.content.strip()
         lines = [l.strip("•- \t") for l in text.splitlines() if l.strip()]
         return lines[:n] if lines else []
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Query expansion failed: {e}")
         return []
 
 
@@ -475,14 +509,24 @@ def generate_answer(question: str, docs, chosen_gen: str | None = None) -> Tuple
             return answer, citations
 
     # 2) Fallback LLM (comportement existant)
-    messages = _build_messages(question, docs)
-    resp = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
-        temperature=0.2,
-    )
-    answer = resp.choices[0].message.content
-    citations = _collect_citations(docs)
-    ...
-    return answer, citations
+    # Fallback si client OpenAI non disponible
+    if client is None:
+        logger.warning("OpenAI client not available for answer generation")
+        error_msg = "Ik kan momenteel geen automatisch antwoord genereren vanwege een configuratieprobleem. Neem contact op met de ondersteuning."
+        return error_msg, _collect_citations(docs)
+
+    try:
+        messages = _build_messages(question, docs)
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            temperature=0.2,
+        )
+        answer = resp.choices[0].message.content
+        citations = _collect_citations(docs)
+        return answer, citations
+    except Exception as e:
+        logger.error(f"Answer generation failed: {e}")
+        error_msg = "Ik kan momenteel geen automatisch antwoord genereren. Probeer het opnieuw of neem contact op met de ondersteuning."
+        return error_msg, _collect_citations(docs)
 
