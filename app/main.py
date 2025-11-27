@@ -26,8 +26,14 @@ from .config import (
     # optionnel si tu veux un /health bavard:
     # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
 )
+from .admin_routes import admin_router
 
 app = FastAPI(title="Chatbot Piscines API")
+
+# ---------------------------------------------------------------------
+# Include routers
+# ---------------------------------------------------------------------
+app.include_router(admin_router)
 
 # ---------------------------------------------------------------------
 # CORS
@@ -40,7 +46,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[
         "Content-Type",
         "ngrok-skip-browser-warning",
