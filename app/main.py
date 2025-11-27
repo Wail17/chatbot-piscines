@@ -21,6 +21,7 @@ from .rag import (
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
+from .admin_routes import admin_router
 from .config import (
     CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR, EMBEDDINGS_MODEL,
     # optionnel si tu veux un /health bavard:
@@ -28,6 +29,9 @@ from .config import (
 )
 
 app = FastAPI(title="Chatbot Piscines API")
+
+# Include admin router
+app.include_router(admin_router)
 
 # ---------------------------------------------------------------------
 # CORS
@@ -40,7 +44,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[
         "Content-Type",
         "ngrok-skip-browser-warning",
