@@ -108,12 +108,17 @@ _FAQ_EMBED_DISABLED = False
 
 def _load_faq_from_store() -> List[dict]:
     try:
+        print(f"[DEBUG] Loading FAQ from store: {_FAQ_PATH}")
         with open(_FAQ_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list):
+            print(f"[DEBUG] Loaded {len(data)} entries from store")
             return data
-    except Exception:
-        pass
+        print(f"[DEBUG] Store data is not a list: {type(data)}")
+    except FileNotFoundError:
+        print(f"[DEBUG] Store file not found: {_FAQ_PATH}")
+    except Exception as e:
+        print(f"[DEBUG] Error loading from store: {type(e).__name__}: {e}")
     return []
 
 
@@ -124,11 +129,16 @@ def _coerce_str(val: Any) -> str:
 
 
 def _load_faq_from_jsonl(path: str) -> List[dict]:
+    print(f"[DEBUG] Loading FAQ from JSONL: {path}")
+    print(f"[DEBUG] File exists: {os.path.exists(path)}")
+
     if not os.path.exists(path):
+        print(f"[DEBUG] JSONL file not found: {path}")
         return []
 
     rows: List[dict] = []
     try:
+        print(f"[DEBUG] Opening JSONL file...")
         with open(path, "r", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
@@ -218,7 +228,11 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                     row["tags"] = [str(t).strip() for t in tags if str(t).strip()]
 
                 rows.append(row)
-    except Exception:
+        print(f"[DEBUG] Successfully loaded {len(rows)} entries from JSONL")
+    except Exception as e:
+        print(f"[DEBUG] Error loading from JSONL: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
     return rows
@@ -232,11 +246,22 @@ def _reset_faq_embeddings() -> None:
 
 
 def _reload_faq() -> Tuple[int, List[dict]]:
+    print("[DEBUG] ========== RELOADING FAQ ==========")
     data: List[dict] = _load_faq_from_store()
     if not data:
+        print("[DEBUG] Store is empty, loading from JSONL fallback...")
         data = _load_faq_from_jsonl(_FAQ_FALLBACK_JSONL)
+    else:
+        print(f"[DEBUG] Loaded {len(data)} entries from store")
+
     global _FAQ
     _FAQ = data
+    print(f"[DEBUG] FAQ reloaded: {len(_FAQ)} items")
+    if _FAQ:
+        print(f"[DEBUG] First FAQ item: {_FAQ[0].get('question', 'NO QUESTION')[:80]}...")
+    else:
+        print("[DEBUG] ❌ WARNING: FAQ is empty!")
+
     _reset_faq_embeddings()
     for row in _FAQ:
         row["_embedding"] = _EMBED_UNSET
@@ -1221,7 +1246,9 @@ def _pop_valid_pending(client_id: str) -> dict | None:
 # Matching helpers
 # ---------------------------------------------------------------------
 def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
+    print(f"[DEBUG] Matching question: '{user_q}' in {len(_FAQ)} FAQ items")
     if not _FAQ:
+        print("[DEBUG] ❌ ERROR: _FAQ is empty!")
         return (None, [])
     uq_base, uq_aug = _normalize_query(user_q)
     if not uq_base:
