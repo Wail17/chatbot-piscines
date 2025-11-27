@@ -18,6 +18,7 @@ from .rag import (
     detect_language_code,
     translate_answer,
     translate_for_matching,
+    get_top_suggestions,
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
@@ -59,6 +60,8 @@ class ChatRequest(BaseModel):
     audience: str = "client"
     debug: bool = False
     extra: Optional[Dict[str, Any]] = None
+    top_k: int = 4  # Nombre de suggestions à retourner
+    min_similarity: float = 0.3  # Score de similarité minimum (0-1)
 
 class IngestRequest(BaseModel):
     path: str
@@ -895,6 +898,98 @@ def _get_question_in_language(row: dict, lang_code: str) -> str:
     return question
 
 
+def _get_faq_suggestions_with_scores(
+    user_q: str,
+    top_k: int = 4,
+    min_similarity: float = 0.3,
+    lang_code: str = "nl"
+) -> List[dict]:
+    """
+    Récupère les top K suggestions FAQ avec leurs scores de similarité et métadonnées complètes.
+
+    Args:
+        user_q: La question de l'utilisateur
+        top_k: Nombre de suggestions à retourner (défaut: 4)
+        min_similarity: Score de similarité minimum (0-1, défaut: 0.3)
+        lang_code: Code de langue pour les traductions
+
+    Returns:
+        Liste de suggestions avec format:
+        [{
+            "question": str,
+            "answer": str,
+            "category": str,
+            "similarity_score": float (0-100),
+            "follow_up": dict (optionnel),
+            "media": dict (optionnel)
+        }]
+    """
+    try:
+        # Obtenir les scores sémantiques pour toutes les FAQ
+        scores = _semantic_scores(user_q)
+        if not scores:
+            return []
+
+        # Convertir en liste triée par score décroissant
+        candidates = sorted(
+            [(row, score) for row_id, (row, score) in scores.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        suggestions = []
+        for row, score in candidates:
+            # Filtrer par score minimum
+            if score < min_similarity:
+                continue
+
+            # Extraire les informations de la FAQ
+            question = _get_question_in_language(row, lang_code)
+            answer = (row.get("answer") or row.get("antwoord") or "").strip()
+            category = (row.get("category") or row.get("categorie") or "").strip()
+
+            suggestion = {
+                "question": question,
+                "answer": _ensure_language(answer, lang_code),
+                "category": category,
+                "similarity_score": round(score * 100, 1)  # Convertir en pourcentage
+            }
+
+            # Ajouter les informations de follow-up si disponibles
+            if row.get("follow_up"):
+                followup_q = row.get("followup_q") or row.get("follow_up_question") or ""
+                options = row.get("options") or {}
+                suggestion["follow_up"] = {
+                    "question": followup_q,
+                    "options": list(options.keys()) if options else []
+                }
+
+            # Ajouter les médias si disponibles
+            media = _extract_media_from_payload(row)
+            if media:
+                suggestion["media"] = media
+
+            # Ajouter la vidéo si disponible
+            video_url = row.get("video_url")
+            if video_url:
+                if "media" not in suggestion:
+                    suggestion["media"] = {}
+                suggestion["media"]["video"] = video_url
+
+            suggestions.append(suggestion)
+
+            # Arrêter si on a assez de suggestions
+            if len(suggestions) >= top_k:
+                break
+
+        return suggestions
+
+    except Exception as exc:
+        import logging
+        logging.warning(f"Error generating FAQ suggestions with scores: {exc}")
+        return []
+
+
 def _get_similar_questions(
     current_row: dict,
     user_q: str,
@@ -1677,6 +1772,86 @@ def debug_imports():
         out["vectorstore_error"] = str(e)
     return out
 
+def _build_response_from_suggestions(
+    suggestions: List[dict],
+    user_q: str,
+    lang_code: str,
+    high_confidence_threshold: float = 85.0,
+    min_match_threshold: float = 30.0
+) -> Optional[Dict[str, Any]]:
+    """
+    Construit la réponse appropriée basée sur les suggestions et leurs scores.
+
+    Args:
+        suggestions: Liste des suggestions avec scores
+        user_q: Question de l'utilisateur
+        lang_code: Code de langue
+        high_confidence_threshold: Seuil pour haute confiance (défaut: 85%)
+        min_match_threshold: Seuil minimum pour match (défaut: 30%)
+
+    Returns:
+        Dictionnaire de réponse ou None si aucune suggestion valide
+    """
+    if not suggestions:
+        return {
+            "success": True,
+            "user_question": user_q,
+            "response": {
+                "type": "no_match",
+                "message": _ensure_language(
+                    "Ik heb geen geschikte antwoorden gevonden voor je vraag. Kun je je vraag anders formuleren?",
+                    lang_code
+                ),
+                "suggestions": []
+            }
+        }
+
+    # Vérifier le score du meilleur match
+    best_score = suggestions[0]["similarity_score"]
+
+    if best_score >= high_confidence_threshold:
+        # Haute confiance: retourner la réponse directe + alternatives
+        best_match = suggestions[0]
+        alternatives = suggestions[1:] if len(suggestions) > 1 else []
+
+        return {
+            "success": True,
+            "user_question": user_q,
+            "response": {
+                "type": "high_confidence",
+                "message": _ensure_language("Voici la réponse la plus pertinente:", lang_code),
+                "best_match": best_match,
+                "alternatives": alternatives,
+                "suggestions": suggestions
+            }
+        }
+    elif best_score >= min_match_threshold:
+        # Confiance moyenne: afficher toutes les suggestions
+        return {
+            "success": True,
+            "user_question": user_q,
+            "response": {
+                "type": "multiple_suggestions",
+                "message": _ensure_language("Voici les questions qui correspondent le mieux:", lang_code),
+                "suggestions": suggestions
+            }
+        }
+    else:
+        # Aucun match suffisant
+        return {
+            "success": True,
+            "user_question": user_q,
+            "response": {
+                "type": "no_match",
+                "message": _ensure_language(
+                    "Ik heb geen geschikte antwoorden gevonden voor je vraag. Voici quelques questions similaires:",
+                    lang_code
+                ),
+                "suggestions": suggestions
+            }
+        }
+
+
 # ---------------------------------------------------------------------
 # Chat
 # ---------------------------------------------------------------------
@@ -1700,6 +1875,37 @@ def chat(req: ChatRequest, request: Request):
             lang_code = pending_lang
     if not lang_code:
         lang_code = "nl"
+
+    # ----- MODE SUGGESTIONS MULTIPLES -----
+    # Si top_k > 1, utiliser le nouveau système de suggestions multiples
+    use_multiple_suggestions = req.top_k > 1
+
+    if use_multiple_suggestions and not clarify_ref:
+        # Obtenir les suggestions FAQ avec scores
+        try:
+            suggestions = _get_faq_suggestions_with_scores(
+                user_q=q,
+                top_k=req.top_k,
+                min_similarity=req.min_similarity,
+                lang_code=lang_code
+            )
+
+            # Construire la réponse appropriée selon les scores
+            response = _build_response_from_suggestions(
+                suggestions=suggestions,
+                user_q=q,
+                lang_code=lang_code,
+                high_confidence_threshold=85.0,
+                min_match_threshold=req.min_similarity * 100  # Convertir en pourcentage
+            )
+
+            if response:
+                return response
+
+        except Exception as e:
+            import logging
+            logging.warning(f"Error in multiple suggestions mode: {e}")
+            # Continue avec la logique traditionnelle en cas d'erreur
 
     # Corrections admin
     ans = cite = None
