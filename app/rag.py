@@ -488,6 +488,69 @@ def _collect_citations(docs) -> list:
     return citations
 
 
+def get_top_suggestions(question: str, top_k: int = 4, min_similarity: float = 0.3) -> List[dict]:
+    """
+    Récupère les top K suggestions de documents similaires avec leurs scores de similarité.
+
+    Args:
+        question: La question de l'utilisateur
+        top_k: Nombre de suggestions à retourner (défaut: 4)
+        min_similarity: Score de similarité minimum (0-1, défaut: 0.3)
+
+    Returns:
+        Liste de dictionnaires contenant les suggestions avec leurs scores
+        Format: [{
+            "question": str,
+            "answer": str,
+            "similarity_score": float (0-100),
+            "metadata": dict
+        }]
+    """
+    try:
+        # Récupérer les documents avec scores de distance
+        pairs = retrieve_with_scores(question)
+        if not pairs:
+            logger.info("get_top_suggestions: no results found")
+            return []
+
+        suggestions = []
+        for doc, distance_score in pairs[:top_k * 2]:  # Récupère plus pour filtrer
+            # Convertir la distance en similarité (distance faible = haute similarité)
+            # Pour L2 distance, on utilise: similarity = 1 / (1 + distance)
+            similarity = 1.0 / (1.0 + distance_score)
+
+            # Filtrer par score minimum
+            if similarity < min_similarity:
+                continue
+
+            # Extraire les métadonnées
+            metadata = doc.metadata or {}
+
+            suggestion = {
+                "question": metadata.get("title", ""),
+                "answer": doc.page_content or "",
+                "similarity_score": round(similarity * 100, 1),  # Convertir en pourcentage
+                "category": metadata.get("category", ""),
+                "metadata": metadata
+            }
+
+            suggestions.append(suggestion)
+
+            # Arrêter si on a assez de suggestions
+            if len(suggestions) >= top_k:
+                break
+
+        # Trier par score décroissant
+        suggestions.sort(key=lambda x: x["similarity_score"], reverse=True)
+
+        logger.info("get_top_suggestions: returned %d suggestions", len(suggestions))
+        return suggestions[:top_k]
+
+    except Exception as e:
+        logger.exception("get_top_suggestions failed: %s", e)
+        return []
+
+
 def generate_answer(question: str, docs, chosen_gen: str | None = None) -> Tuple[str, list]:
     """
     Si chosen_gen est fourni (gen1/gen2/gen3) et que le contexte contient des blocs 'Gen X:',
