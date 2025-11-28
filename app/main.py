@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
+from openai import OpenAI
 
 from .rag import (
     retrieve,
@@ -24,7 +25,7 @@ from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
 from .admin_routes import admin_router
 from .config import (
-    CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR, EMBEDDINGS_MODEL,
+    CORRECTION_THRESHOLD, STORE_DIR, DATA_DIR, EMBEDDINGS_MODEL, LLM_MODEL,
     # optionnel si tu veux un /health bavard:
     # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
 )
@@ -104,6 +105,18 @@ _EMBED_UNSET = object()
 _FAQ_EMBED_LOCK: Lock = Lock()
 _FAQ_EMBEDDER: Optional[OpenAIEmbeddings] = None
 _FAQ_EMBED_DISABLED = False
+
+# Initialize OpenAI client for GPT fallback
+_openai_client: Optional[OpenAI] = None
+_api_key = os.environ.get("OPENAI_API_KEY")
+if _api_key:
+    try:
+        _openai_client = OpenAI(api_key=_api_key)
+    except Exception as e:
+        print(f"[WARNING] Failed to initialize OpenAI client: {e}")
+        _openai_client = None
+else:
+    print("[WARNING] Missing OPENAI_API_KEY - GPT fallback will be disabled")
 
 # Debug logs
 print(f"[DEBUG] FAQ file path: {_FAQ_FALLBACK_JSONL}")
@@ -704,6 +717,38 @@ def _ensure_language(text: str, lang_code: str | None) -> str:
     if not text:
         return text
     return translate_answer(text, lang_code or "")
+
+
+def _gpt_fallback_answer(question: str, lang_code: str = "nl") -> Optional[str]:
+    """
+    Generate an intelligent answer using GPT when FAQ doesn't have the answer.
+    Returns None if GPT is unavailable or fails.
+    """
+    if not _openai_client:
+        return None
+
+    try:
+        prompt = f"""You are a pool equipment support assistant for Beniferro.
+
+Answer this customer question in Dutch:
+{question}
+
+Provide helpful, accurate information about pool equipment (Wifipool, salt electrolysis, sensors, pumps, etc).
+If you're not sure, suggest contacting support at support@beniferro.eu.
+Keep the answer clear and concise."""
+
+        response = _openai_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=500
+        )
+        answer = response.choices[0].message.content
+        return answer
+    except Exception as e:
+        print(f"[ERROR] GPT fallback failed: {e}")
+        return None
+
 
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
@@ -2462,7 +2507,20 @@ def chat(req: ChatRequest, request: Request):
     if matched_row:
         return _respond_for_row(matched_row, lang_code, client_id, q)
 
-    # ----- 3) RAG fallback
+    # ----- 3) GPT fallback for intelligent answers
+    gpt_answer = _gpt_fallback_answer(q, lang_code)
+    if gpt_answer:
+        # Add a note that the answer is AI-generated
+        ai_note = "\n\n*Deze informatie is gegenereerd door AI. Voor specifieke vragen kunt u contact opnemen met support@beniferro.eu.*"
+        full_answer = gpt_answer + ai_note
+        response = {
+            "answer": _ensure_language(full_answer, lang_code),
+            "citations": [],
+            "source": "ai_fallback"
+        }
+        return _add_suggestions_to_response(response, q, lang_code, None)
+
+    # ----- 4) RAG fallback
     extra_gen = _parse_extra_gen(req.extra)
     try:
         gen = extra_gen or detect_gen(q)
