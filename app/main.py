@@ -2505,7 +2505,29 @@ def chat(req: ChatRequest, request: Request):
         }
         return _add_suggestions_to_response(response, q, lang_code, None)
     if matched_row:
-        return _respond_for_row(matched_row, lang_code, client_id, q)
+        # Check if the matched row has a valid, useful answer
+        answer = (matched_row.get("answer") or matched_row.get("antwoord") or "").strip()
+        has_follow_up = matched_row.get("follow_up")
+        has_options = bool(matched_row.get("options"))
+
+        # Consider answer valid if:
+        # 1. It has follow-up options (interactive flow)
+        # 2. It has a substantial answer (not empty, not just "choose device type")
+        is_valid_faq_answer = (
+            has_follow_up or
+            has_options or
+            (answer and
+             "kies hieronder je toesteltype" not in answer.lower() and
+             answer.lower() not in ["geen antwoord gevonden.", "geen antwoord beschikbaar", ""])
+        )
+
+        if is_valid_faq_answer:
+            response = _respond_for_row(matched_row, lang_code, client_id, q)
+            # Add source field to indicate this is from FAQ
+            if "source" not in response:
+                response["source"] = "faq"
+            return response
+        # If FAQ match has no useful answer, fall through to GPT fallback
 
     # ----- 3) GPT fallback for intelligent answers
     gpt_answer = _gpt_fallback_answer(q, lang_code)
