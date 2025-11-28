@@ -7,6 +7,7 @@ from difflib import SequenceMatcher, get_close_matches
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
 
@@ -33,6 +34,32 @@ app = FastAPI(title="Chatbot Piscines API")
 
 # Include admin router
 app.include_router(admin_router)
+
+# Global exception handler for unhandled errors
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import logging
+    import traceback
+    logger = logging.getLogger(__name__)
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}")
+    logger.error(traceback.format_exc())
+
+    # For chat endpoint, return proper format
+    if "/chat" in str(request.url):
+        return JSONResponse(
+            status_code=200,  # Return 200 to prevent frontend from showing generic error
+            content={
+                "answer": "Er is een technische fout opgetreden. Probeer het opnieuw of neem contact op met support@beniferro.eu",
+                "citations": [],
+                "error": True
+            }
+        )
+
+    # For other endpoints, return generic error
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {type(exc).__name__}"}
+    )
 
 # ---------------------------------------------------------------------
 # CORS
