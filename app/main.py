@@ -64,7 +64,7 @@ class ChatRequest(BaseModel):
     audience: str = "client"
     debug: bool = False
     extra: Optional[Dict[str, Any]] = None
-    top_k: int = 4  # Nombre de suggestions à retourner
+    top_k: int = 1  # Nombre de suggestions à retourner (1 = mode traditionnel, >1 = suggestions multiples)
     min_similarity: float = 0.3  # Score de similarité minimum (0-1)
 
 class IngestRequest(BaseModel):
