@@ -278,11 +278,12 @@ _reload_faq()
 # ---------------------------------------------------------------------
 # Normalization helpers
 # ---------------------------------------------------------------------
-_PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»“”\"'`]\s*")
-_MATCH_THRESHOLD = 0.68
-_SEMANTIC_MATCH_THRESHOLD = 0.78
-_SEMANTIC_TRIGGER = 0.63
-_CERTAINTY_THRESHOLD = 0.84
+_PUNCT_RE = re.compile(r"\s*[?!.:,;()\-\[\]«»""\"'`]\s*")
+# Lowered thresholds to improve matching (was 0.68, 0.78, 0.63, 0.84)
+_MATCH_THRESHOLD = 0.55  # Was 0.68 - too high
+_SEMANTIC_MATCH_THRESHOLD = 0.65  # Was 0.78 - too high
+_SEMANTIC_TRIGGER = 0.50  # Was 0.63 - too high
+_CERTAINTY_THRESHOLD = 0.75  # Was 0.84 - too high
 _CERTAINTY_GAP = 0.1
 _AMBIGUITY_GAP = 0.06
 _AMBIGUITY_PEER_THRESHOLD = 0.55
@@ -1252,55 +1253,138 @@ def _pop_valid_pending(client_id: str) -> dict | None:
 # Matching helpers
 # ---------------------------------------------------------------------
 def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
-    print(f"[DEBUG] Matching question: '{user_q}' in {len(_FAQ)} FAQ items")
+    print(f"\n[DEBUG] ========== MATCHING QUESTION ==========")
+    print(f"[DEBUG] User question: '{user_q}'")
+    print(f"[DEBUG] Total FAQ items: {len(_FAQ)}")
+
     if not _FAQ:
         print("[DEBUG] ERROR: _FAQ is empty!")
         return (None, [])
+
     uq_base, uq_aug = _normalize_query(user_q)
+    print(f"[DEBUG] Normalized base: '{uq_base}'")
+    print(f"[DEBUG] Normalized augmented: '{uq_aug}'")
+
     if not uq_base:
+        print("[DEBUG] ERROR: Normalized query is empty!")
         return (None, [])
+
     direct_matches: List[dict] = []
     query_canon = _canonical_tokens(uq_aug)
+    print(f"[DEBUG] Canonical tokens: {query_canon}")
     row_scores: Dict[int, Tuple[dict, float]] = {}
+
+    # Track all scores for debugging
+    all_scores: List[Tuple[str, float]] = []
+    row_count = 0
+
     for row in _FAQ:
+        row_count += 1
         base_norm, aug_norm = _row_norms(row)
+
+        # Get the question for debugging
+        question_text = row.get("question", "NO_QUESTION_FIELD")
+
+        # Debug first few rows in detail
+        if row_count <= 5:
+            print(f"\n[DEBUG] Row {row_count}:")
+            print(f"[DEBUG]   Question: '{question_text[:80]}...' " if len(str(question_text)) > 80 else f"[DEBUG]   Question: '{question_text}'")
+            print(f"[DEBUG]   base_norm: '{base_norm[:80]}...' " if len(str(base_norm)) > 80 else f"[DEBUG]   base_norm: '{base_norm}'")
+            print(f"[DEBUG]   aug_norm: '{aug_norm[:80]}...' " if len(str(aug_norm)) > 80 else f"[DEBUG]   aug_norm: '{aug_norm}'")
+
         if not base_norm and not aug_norm:
+            if row_count <= 5:
+                print(f"[DEBUG]   SKIPPED: Both norms are empty")
             continue
+
         if base_norm and (
             uq_base == base_norm or (uq_base and (uq_base in base_norm or base_norm in uq_base))
         ):
+            if row_count <= 10:
+                print(f"[DEBUG]   DIRECT MATCH found!")
             direct_matches.append(row)
             continue
+
         score = _similarity(uq_aug, aug_norm)
+
+        # Log score for first few rows
+        if row_count <= 10:
+            print(f"[DEBUG]   Similarity score: {score:.4f}")
+
+        # Store score for debugging (all rows)
+        all_scores.append((question_text[:100] if question_text else "NO_Q", score))
+
+        # REDUCED canonical token penalties - they were too severe!
+        # Old: 0.55 (45% penalty), 0.75 (25% penalty)
+        # New: 0.85 (15% penalty), 0.90 (10% penalty)
         if score > 0.0 and query_canon:
             row_canon = _canonical_tokens(aug_norm)
             if not row_canon:
-                score *= 0.55
+                score *= 0.85  # Was 0.55 - too severe!
+                if row_count <= 10:
+                    print(f"[DEBUG]   Score penalty (no canonical): {score:.4f}")
             else:
                 overlap = len(query_canon & row_canon)
                 coverage = overlap / float(len(query_canon))
                 if coverage < 0.4:
-                    score *= 0.55
+                    score *= 0.85  # Was 0.55 - too severe!
+                    if row_count <= 10:
+                        print(f"[DEBUG]   Score penalty (low coverage {coverage:.2f}): {score:.4f}")
                 elif coverage < 0.65:
-                    score *= 0.75
+                    score *= 0.90  # Was 0.75 - too severe!
+                    if row_count <= 10:
+                        print(f"[DEBUG]   Score penalty (medium coverage {coverage:.2f}): {score:.4f}")
                 else:
                     score = min(1.0, score + min(1.0, coverage) * 0.25)
+                    if row_count <= 10:
+                        print(f"[DEBUG]   Score boost (high coverage {coverage:.2f}): {score:.4f}")
+
         if score > 0.0:
             key = id(row)
             stored = row_scores.get(key)
             if not stored or score > stored[1]:
                 row_scores[key] = (row, score)
+                if row_count <= 10:
+                    print(f"[DEBUG]   STORED in row_scores with score {score:.4f}")
+
+    # Summary after processing all rows
+    print(f"\n[DEBUG] ========== MATCHING SUMMARY ==========")
+    print(f"[DEBUG] Rows processed: {row_count}")
+    print(f"[DEBUG] Direct matches: {len(direct_matches)}")
+    print(f"[DEBUG] Scored rows: {len(row_scores)}")
+
+    # Show top 10 scores
+    all_scores.sort(key=lambda x: x[1], reverse=True)
+    print(f"\n[DEBUG] Top 10 scores (even if below threshold):")
+    for i, (q, s) in enumerate(all_scores[:10], 1):
+        print(f"[DEBUG]   {i}. Score {s:.4f}: {q}")
+
+    print(f"\n[DEBUG] Thresholds:")
+    print(f"[DEBUG]   _MATCH_THRESHOLD = {_MATCH_THRESHOLD}")
+    print(f"[DEBUG]   _SEMANTIC_MATCH_THRESHOLD = {_SEMANTIC_MATCH_THRESHOLD}")
+    print(f"[DEBUG]   _SEMANTIC_TRIGGER = {_SEMANTIC_TRIGGER}")
+    print(f"[DEBUG]   _CERTAINTY_THRESHOLD = {_CERTAINTY_THRESHOLD}")
+
     if direct_matches:
+        print(f"[DEBUG] Returning {len(direct_matches)} direct match(es)")
         if len(direct_matches) == 1:
             return (direct_matches[0], [])
         return (None, direct_matches[:4])
+
     need_semantic = not row_scores
     if not need_semantic:
         prelim = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
         if not prelim or prelim[0][1] < _SEMANTIC_TRIGGER:
+            print(f"[DEBUG] Need semantic matching (best score: {prelim[0][1] if prelim else 0:.4f} < {_SEMANTIC_TRIGGER})")
             need_semantic = True
+        else:
+            print(f"[DEBUG] Best preliminary score: {prelim[0][1]:.4f}")
+
     if need_semantic:
+        print(f"[DEBUG] Triggering semantic matching...")
         semantic_scores = _semantic_scores(user_q)
+        print(f"[DEBUG] Semantic matching returned {len(semantic_scores)} scores")
+
         for key, (row, score) in semantic_scores.items():
             stored = row_scores.get(key)
             if stored:
@@ -1308,21 +1392,76 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
                     row_scores[key] = (row, score)
             else:
                 row_scores[key] = (row, score)
+
+        print(f"[DEBUG] After semantic: {len(row_scores)} total scored rows")
+
     if not row_scores:
+        print(f"[DEBUG] ERROR: No row_scores found! Returning (None, [])")
         return (None, [])
+
     candidates = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
+    print(f"[DEBUG] Sorted candidates: {len(candidates)}")
+
     candidates = [item for item in candidates if item[1] > 0.0]
+    print(f"[DEBUG] Candidates with score > 0: {len(candidates)}")
+
     if not candidates:
+        print(f"[DEBUG] ERROR: No candidates with score > 0!")
+        print(f"[DEBUG] Trying FALLBACK simple substring matching...")
+
+        # FALLBACK: Simple substring/token matching for desperate cases
+        fallback_matches = []
+        query_tokens = set(uq_base.split())
+
+        for row in _FAQ:
+            question_text = row.get("question", "")
+            base_norm, _ = _row_norms(row)
+
+            if not base_norm:
+                continue
+
+            # Check for any token overlap
+            row_tokens = set(base_norm.split())
+            common_tokens = query_tokens & row_tokens
+
+            if common_tokens:
+                overlap_ratio = len(common_tokens) / max(len(query_tokens), len(row_tokens))
+                if overlap_ratio > 0.3:  # At least 30% token overlap
+                    fallback_matches.append((row, overlap_ratio))
+
+        if fallback_matches:
+            fallback_matches.sort(key=lambda x: x[1], reverse=True)
+            top_fallback = fallback_matches[0]
+            print(f"[DEBUG] FALLBACK found {len(fallback_matches)} matches!")
+            print(f"[DEBUG] Best fallback score: {top_fallback[1]:.4f}")
+            print(f"[DEBUG] Question: {top_fallback[0].get('question', '')[:100]}")
+
+            # Return top fallback match if decent overlap
+            if top_fallback[1] >= 0.4:
+                return (top_fallback[0], [])
+
+        print(f"[DEBUG] No fallback matches found. Returning (None, [])")
         return (None, [])
     top_row, top_score = candidates[0]
     second_score = candidates[1][1] if len(candidates) > 1 else 0.0
+
+    print(f"\n[DEBUG] ========== FINAL DECISION ==========")
+    print(f"[DEBUG] Top score: {top_score:.4f}")
+    print(f"[DEBUG] Second score: {second_score:.4f}")
+    print(f"[DEBUG] Top question: {top_row.get('question', 'NO_Q')[:100]}")
+
     if top_score >= _CERTAINTY_THRESHOLD or (
         top_score >= _MATCH_THRESHOLD and (top_score - second_score) >= _CERTAINTY_GAP
     ):
+        print(f"[DEBUG] MATCH FOUND (certainty or gap)! Returning top row.")
         return (top_row, [])
+
     if top_score < _MATCH_THRESHOLD:
+        print(f"[DEBUG] Top score {top_score:.4f} < threshold {_MATCH_THRESHOLD}. NO MATCH.")
         return (None, [])
+
     if len(candidates) == 1:
+        print(f"[DEBUG] Only one candidate. Returning it.")
         return (top_row, [])
     top_base, top_norm = _row_norms(top_row)
     top_tokens = {
@@ -1358,8 +1497,13 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
             continue
         if peer_sim >= _AMBIGUITY_PEER_THRESHOLD or peer_overlap >= _AMBIGUITY_PEER_THRESHOLD:
             ambiguous.append((row, score))
+
     if len(ambiguous) >= 2:
+        print(f"[DEBUG] Found {len(ambiguous)} ambiguous matches. Returning for clarification.")
         return (None, [row for row, _ in ambiguous])
+
+    print(f"[DEBUG] Returning single match (top row).")
+    print(f"[DEBUG] ========== END MATCHING ==========\n")
     return (top_row, [])
 
 def _build_ambiguity_message(rows: List[dict]) -> str:
@@ -1475,12 +1619,32 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
 
         return response
 
-    # No answer found - still provide suggestions
-    response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+    # No answer found BUT question matched - provide helpful message with suggestions
+    # This handles FAQ entries with empty answers (like the reset question)
+    question_matched = row.get("question", "").strip()
+    if question_matched:
+        friendly_msg = (
+            f"Ik heb je vraag '{question_matched[:100]}' gevonden, "
+            f"maar het antwoord is nog niet beschikbaar. "
+            f"Neem contact op met support@beniferro.eu voor meer informatie. "
+            f"Hier zijn enkele gerelateerde vragen die ik wel kan beantwoorden:"
+        )
+        response = {
+            "answer": _ensure_language(friendly_msg, lang_code),
+            "citations": _citations_for_row(row)
+        }
+    else:
+        response = {
+            "answer": _ensure_language("Geen antwoord gevonden.", lang_code),
+            "citations": []
+        }
+
+    # Always provide suggestions when answer is missing
     if user_q:
         suggestions = _get_similar_questions(row, user_q, lang_code)
         if suggestions:
             response["suggestions"] = suggestions
+
     return response
 
 
@@ -1798,6 +1962,140 @@ def force_reload_faq():
         "count": count,
         "source": "JSONL fallback" if not os.path.exists(_FAQ_PATH) else "Store"
     }
+
+@app.get("/debug/test-match")
+def debug_test_match(q: str = "Hoe reset ik mijn wifipool?"):
+    """
+    Debug endpoint to test FAQ matching with detailed scoring.
+    Shows why a question matches or doesn't match.
+
+    Args:
+        q: Question to test (default: "Hoe reset ik mijn wifipool?")
+
+    Returns detailed matching information including:
+    - Normalized query
+    - All FAQ scores (top 20)
+    - Matched row (if any)
+    - Clarification options (if any)
+    - Threshold comparisons
+    """
+    if not _FAQ:
+        return {
+            "error": "FAQ is empty",
+            "faq_count": 0,
+            "query": q
+        }
+
+    # Normalize the query
+    uq_base, uq_aug = _normalize_query(q)
+    query_canon = _canonical_tokens(uq_aug)
+
+    # Calculate all scores manually for debugging
+    all_scores = []
+    for row in _FAQ:
+        base_norm, aug_norm = _row_norms(row)
+        question_text = row.get("question", "NO_QUESTION")
+
+        if not base_norm and not aug_norm:
+            all_scores.append({
+                "question": question_text[:150],
+                "score": 0.0,
+                "reason": "Empty normalized text"
+            })
+            continue
+
+        # Check for direct match
+        if base_norm and (
+            uq_base == base_norm or (uq_base and (uq_base in base_norm or base_norm in uq_base))
+        ):
+            all_scores.append({
+                "question": question_text[:150],
+                "score": 1.0,
+                "reason": "Direct match",
+                "base_norm": base_norm[:100],
+                "aug_norm": aug_norm[:100] if aug_norm else ""
+            })
+            continue
+
+        # Calculate similarity
+        score = _similarity(uq_aug, aug_norm)
+        reason = f"Base similarity: {score:.4f}"
+
+        # Apply canonical token penalties/boosts
+        if score > 0.0 and query_canon:
+            row_canon = _canonical_tokens(aug_norm)
+            if not row_canon:
+                original_score = score
+                score *= 0.55
+                reason += f" → {score:.4f} (no canonical tokens)"
+            else:
+                overlap = len(query_canon & row_canon)
+                coverage = overlap / float(len(query_canon))
+                original_score = score
+
+                if coverage < 0.4:
+                    score *= 0.55
+                    reason += f" → {score:.4f} (low coverage: {coverage:.2f})"
+                elif coverage < 0.65:
+                    score *= 0.75
+                    reason += f" → {score:.4f} (medium coverage: {coverage:.2f})"
+                else:
+                    score = min(1.0, score + min(1.0, coverage) * 0.25)
+                    reason += f" → {score:.4f} (high coverage: {coverage:.2f})"
+
+        all_scores.append({
+            "question": question_text[:150],
+            "score": score,
+            "reason": reason,
+            "base_norm": base_norm[:100] if base_norm else "",
+            "aug_norm": aug_norm[:100] if aug_norm else ""
+        })
+
+    # Sort by score
+    all_scores.sort(key=lambda x: x["score"], reverse=True)
+
+    # Now call the actual matching function
+    matched_row, clarify_rows = _match_row_with_clarify(q)
+
+    result = {
+        "query": q,
+        "normalized": {
+            "base": uq_base,
+            "augmented": uq_aug,
+            "canonical_tokens": list(query_canon)
+        },
+        "faq_count": len(_FAQ),
+        "thresholds": {
+            "MATCH_THRESHOLD": _MATCH_THRESHOLD,
+            "SEMANTIC_MATCH_THRESHOLD": _SEMANTIC_MATCH_THRESHOLD,
+            "SEMANTIC_TRIGGER": _SEMANTIC_TRIGGER,
+            "CERTAINTY_THRESHOLD": _CERTAINTY_THRESHOLD
+        },
+        "top_20_scores": all_scores[:20],
+        "matched": None,
+        "clarify_options": [],
+        "matching_result": "NO_MATCH"
+    }
+
+    if matched_row:
+        result["matched"] = {
+            "question": matched_row.get("question", "")[:200],
+            "answer": matched_row.get("answer", "")[:200],
+            "category": matched_row.get("category", ""),
+            "has_follow_up": matched_row.get("follow_up", False)
+        }
+        result["matching_result"] = "MATCHED"
+    elif clarify_rows:
+        result["clarify_options"] = [
+            {
+                "question": row.get("question", "")[:200],
+                "category": row.get("category", "")
+            }
+            for row in clarify_rows
+        ]
+        result["matching_result"] = "NEEDS_CLARIFICATION"
+
+    return result
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):
