@@ -105,6 +105,14 @@ _FAQ_EMBED_LOCK: Lock = Lock()
 _FAQ_EMBEDDER: Optional[OpenAIEmbeddings] = None
 _FAQ_EMBED_DISABLED = False
 
+# Debug logs
+print(f"[DEBUG] FAQ file path: {_FAQ_FALLBACK_JSONL}")
+print(f"[DEBUG] FAQ file exists: {os.path.exists(_FAQ_FALLBACK_JSONL)}")
+if os.path.exists(_FAQ_FALLBACK_JSONL):
+    import os as os_stat
+    file_size = os_stat.path.getsize(_FAQ_FALLBACK_JSONL)
+    print(f"[DEBUG] FAQ file size: {file_size} bytes")
+
 
 def _load_faq_from_store() -> List[dict]:
     try:
@@ -124,19 +132,27 @@ def _coerce_str(val: Any) -> str:
 
 
 def _load_faq_from_jsonl(path: str) -> List[dict]:
+    print(f"[DEBUG] _load_faq_from_jsonl called with path: {path}")
     if not os.path.exists(path):
+        print(f"[DEBUG] ERROR: Path does not exist: {path}")
         return []
+    print(f"[DEBUG] Path exists, starting to read...")
 
     rows: List[dict] = []
+    line_count = 0
+    skipped_empty_q = 0
+    skipped_parse_error = 0
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for line in fh:
+                line_count += 1
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     obj = json.loads(line)
-                except Exception:
+                except Exception as e:
+                    skipped_parse_error += 1
                     continue
 
                 question = _coerce_str(
@@ -146,6 +162,7 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                     or obj.get("Question")
                 )
                 if not question:
+                    skipped_empty_q += 1
                     continue
 
                 category = _coerce_str(
@@ -218,9 +235,15 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                     row["tags"] = [str(t).strip() for t in tags if str(t).strip()]
 
                 rows.append(row)
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] ERROR loading FAQ JSONL: {type(e).__name__}: {e}")
         return []
 
+    print(f"[DEBUG] JSONL parsing complete:")
+    print(f"[DEBUG]   - Total lines read: {line_count}")
+    print(f"[DEBUG]   - Parse errors: {skipped_parse_error}")
+    print(f"[DEBUG]   - Empty questions: {skipped_empty_q}")
+    print(f"[DEBUG]   - Valid FAQ items: {len(rows)}")
     return rows
 
 
@@ -233,10 +256,18 @@ def _reset_faq_embeddings() -> None:
 
 def _reload_faq() -> Tuple[int, List[dict]]:
     data: List[dict] = _load_faq_from_store()
+    print(f"[DEBUG] Loaded from store: {len(data)} items")
     if not data:
+        print(f"[DEBUG] Store empty, loading from JSONL: {_FAQ_FALLBACK_JSONL}")
         data = _load_faq_from_jsonl(_FAQ_FALLBACK_JSONL)
+        print(f"[DEBUG] Loaded from JSONL: {len(data)} items")
     global _FAQ
     _FAQ = data
+    print(f"[DEBUG] FAQ reloaded: {len(_FAQ)} items")
+    if _FAQ:
+        print(f"[DEBUG] First FAQ item: {_FAQ[0]}")
+    else:
+        print(f"[DEBUG] ERROR: _FAQ is empty!")
     _reset_faq_embeddings()
     for row in _FAQ:
         row["_embedding"] = _EMBED_UNSET
@@ -1221,7 +1252,9 @@ def _pop_valid_pending(client_id: str) -> dict | None:
 # Matching helpers
 # ---------------------------------------------------------------------
 def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
+    print(f"[DEBUG] Matching question: '{user_q}' in {len(_FAQ)} FAQ items")
     if not _FAQ:
+        print("[DEBUG] ERROR: _FAQ is empty!")
         return (None, [])
     uq_base, uq_aug = _normalize_query(user_q)
     if not uq_base:
@@ -1728,7 +1761,43 @@ def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
 # ---------------------------------------------------------------------
 @app.get("/health")
 def health():
-    return {"status": "ok", "faq_rows": len(_FAQ)}
+    return {
+        "status": "ok",
+        "faq_rows": len(_FAQ),
+        "faq_file_path": _FAQ_FALLBACK_JSONL,
+        "faq_file_exists": os.path.exists(_FAQ_FALLBACK_JSONL)
+    }
+
+@app.get("/debug/faq")
+def debug_faq():
+    """Debug endpoint to check FAQ state"""
+    sample = _FAQ[:5] if _FAQ else []
+    return {
+        "faq_count": len(_FAQ),
+        "faq_path": _FAQ_FALLBACK_JSONL,
+        "faq_exists": os.path.exists(_FAQ_FALLBACK_JSONL),
+        "store_path": _FAQ_PATH,
+        "store_exists": os.path.exists(_FAQ_PATH),
+        "sample_questions": [
+            {
+                "category": item.get("category", ""),
+                "question": item.get("question", "")[:100],
+                "has_answer": bool(item.get("answer", "").strip())
+            }
+            for item in sample
+        ]
+    }
+
+@app.get("/debug/reload-faq")
+def force_reload_faq():
+    """Force reload FAQ from file"""
+    count, _ = _reload_faq()
+    return {
+        "success": True,
+        "message": "FAQ reloaded",
+        "count": count,
+        "source": "JSONL fallback" if not os.path.exists(_FAQ_PATH) else "Store"
+    }
 
 @app.post("/ingest")
 def ingest(req: IngestRequest):

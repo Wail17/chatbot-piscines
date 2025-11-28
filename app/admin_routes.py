@@ -31,7 +31,7 @@ class FAQItemUpdate(BaseModel):
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 # Path to JSONL file
-FAQ_FILE = os.path.join(os.path.dirname(__file__), "../data/all/faq/FAQAI.jsonl")
+FAQ_FILE = os.path.join(os.path.dirname(__file__), "data/all/faq/FAQAI.jsonl")
 
 # ==================== HELPERS ====================
 def load_faq_jsonl() -> List[Dict[str, Any]]:
