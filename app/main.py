@@ -1636,6 +1636,7 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
             "answer": _ensure_language(answer_text, lang_code),
             "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
             "citations": _citations_for_row(row),
+            "source": "faq"
         }
         # Add suggestions even for follow-up questions
         if user_q:
@@ -1645,11 +1646,59 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
         return response
 
     direct = (row.get("answer") or row.get("antwoord") or "").strip()
+
+    # Check if FAQ answer is empty or too short/unhelpful - use GPT fallback
+    MIN_ANSWER_LENGTH = 30  # Minimum meaningful answer length
+    if not direct or len(direct) < MIN_ANSWER_LENGTH:
+        print(f"[DEBUG] FAQ answer empty or too short ({len(direct) if direct else 0} chars), trying GPT fallback...")
+        # Try GPT fallback for empty/short FAQ answers
+        gpt_answer = _gpt_fallback_answer(user_q or question_ref or "", lang_code)
+        if gpt_answer:
+            ai_note = "\n\n*Deze informatie is gegenereerd door AI. Voor specifieke vragen kunt u contact opnemen met support@beniferro.eu.*"
+            response = {
+                "answer": _ensure_language(gpt_answer + ai_note, lang_code),
+                "citations": _citations_for_row(row),
+                "source": "ai_fallback"
+            }
+            if user_q:
+                suggestions = _get_similar_questions(row, user_q, lang_code)
+                if suggestions:
+                    response["suggestions"] = suggestions
+            return response
+
+        # GPT failed, provide friendly message
+        question_matched = row.get("question", "").strip()
+        if question_matched:
+            friendly_msg = (
+                f"Ik heb je vraag '{question_matched[:100]}' gevonden, "
+                f"maar het antwoord is nog niet beschikbaar. "
+                f"Neem contact op met support@beniferro.eu voor meer informatie."
+            )
+            response = {
+                "answer": _ensure_language(friendly_msg, lang_code),
+                "citations": _citations_for_row(row),
+                "source": "faq"
+            }
+        else:
+            response = {
+                "answer": _ensure_language("Geen antwoord gevonden.", lang_code),
+                "citations": [],
+                "source": "faq"
+            }
+
+        if user_q:
+            suggestions = _get_similar_questions(row, user_q, lang_code)
+            if suggestions:
+                response["suggestions"] = suggestions
+        return response
+
+    # FAQ has a good answer - return it
     if direct:
         extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
         response = {
             "answer": _ensure_language(direct + extra_line, lang_code),
             "citations": _citations_for_row(row),
+            "source": "faq"
         }
         media = _extract_media_from_payload(row)
         if media:
@@ -1664,32 +1713,16 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
 
         return response
 
-    # No answer found BUT question matched - provide helpful message with suggestions
-    # This handles FAQ entries with empty answers (like the reset question)
-    question_matched = row.get("question", "").strip()
-    if question_matched:
-        friendly_msg = (
-            f"Ik heb je vraag '{question_matched[:100]}' gevonden, "
-            f"maar het antwoord is nog niet beschikbaar. "
-            f"Neem contact op met support@beniferro.eu voor meer informatie. "
-            f"Hier zijn enkele gerelateerde vragen die ik wel kan beantwoorden:"
-        )
-        response = {
-            "answer": _ensure_language(friendly_msg, lang_code),
-            "citations": _citations_for_row(row)
-        }
-    else:
-        response = {
-            "answer": _ensure_language("Geen antwoord gevonden.", lang_code),
-            "citations": []
-        }
-
-    # Always provide suggestions when answer is missing
+    # Fallback (should not reach here)
+    response = {
+        "answer": _ensure_language("Geen antwoord gevonden.", lang_code),
+        "citations": [],
+        "source": "faq"
+    }
     if user_q:
         suggestions = _get_similar_questions(row, user_q, lang_code)
         if suggestions:
             response["suggestions"] = suggestions
-
     return response
 
 
@@ -2332,7 +2365,7 @@ def chat(req: ChatRequest, request: Request):
         ans = None
     if ans:
         used = [] if not req.debug else [{"meta": {"source_type": "correction", "score": score}, "text": ""}]
-        response = {"answer": _ensure_language(ans, lang_code), "citations": [cite], "used_chunks": used}
+        response = {"answer": _ensure_language(ans, lang_code), "citations": [cite], "used_chunks": used, "source": "correction"}
         return _add_suggestions_to_response(response, q, lang_code, None)
 
     # ----- 1) follow-up avec clarify_ref
@@ -2362,12 +2395,13 @@ def chat(req: ChatRequest, request: Request):
                 "answer": _ensure_language(message, lang_code),
                 "clarify": {"ref": pend.get("q") or clarify_ref, "options": options, "tips": []},
                 "citations": [],
+                "source": "faq"
             }
             return _add_suggestions_to_response(response, q, lang_code, None)
 
         base_row = _find_row_by_ref(clarify_ref)
         if not base_row:
-            response = {"answer": _ensure_language("Ik kan je keuze niet aan de juiste vraag koppelen.", lang_code), "citations": []}
+            response = {"answer": _ensure_language("Ik kan je keuze niet aan de juiste vraag koppelen.", lang_code), "citations": [], "source": "faq"}
             return _add_suggestions_to_response(response, q, lang_code, None)
 
         row_lang = _language_for_ref(base_row.get("question"))
@@ -2381,7 +2415,7 @@ def chat(req: ChatRequest, request: Request):
             chosen = _choose_gen_answer(base_row, gen_key)
             if chosen:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+                response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
                 return _add_suggestions_to_response(response, q, lang_code, base_row)
 
         labels = _labels(base_row)
@@ -2389,21 +2423,22 @@ def chat(req: ChatRequest, request: Request):
             direct = (base_row.get("answer") or base_row.get("antwoord") or "").strip()
             if direct:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                response = {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row)}
+                response = {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
                 return _add_suggestions_to_response(response, q, lang_code, base_row)
-            response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": []}
+            response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": [], "source": "faq"}
             return _add_suggestions_to_response(response, q, lang_code, base_row)
 
         label = _map_choice_to_key(q, labels)
         if not label:
             response = {
                 "answer": _ensure_language("Ik herken deze keuze niet. Kies één van: " + ", ".join(labels), lang_code),
-                "citations": _citations_for_row(base_row)
+                "citations": _citations_for_row(base_row),
+                "source": "faq"
             }
             return _add_suggestions_to_response(response, q, lang_code, base_row)
         answer, media = _build_answer_for_option(base_row, label)
         _PENDING_BY_CLIENT.pop(client_id, None)
-        response = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+        response = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
         if media:
             response["media"] = media
         return _add_suggestions_to_response(response, q, lang_code, base_row)
@@ -2435,6 +2470,7 @@ def chat(req: ChatRequest, request: Request):
                     "answer": _ensure_language(message, lang_code),
                     "clarify": {"ref": pend.get("q") or q, "options": options, "tips": []},
                     "citations": [],
+                    "source": "faq"
                 }
                 return _add_suggestions_to_response(response, q, lang_code, None)
 
@@ -2449,7 +2485,7 @@ def chat(req: ChatRequest, request: Request):
                     chosen = _choose_gen_answer(base_row, gen_key)
                     if chosen:
                         _PENDING_BY_CLIENT.pop(client_id, None)
-                        response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row)}
+                        response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
                         return _add_suggestions_to_response(response, q, lang_code, base_row)
 
                 if labels:
@@ -2460,7 +2496,7 @@ def chat(req: ChatRequest, request: Request):
                     if label:
                         _PENDING_BY_CLIENT.pop(client_id, None)
                         answer, media = _build_answer_for_option(base_row, label)
-                        resp = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row)}
+                        resp = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
                         if media:
                             resp["media"] = media
                         return _add_suggestions_to_response(resp, q, lang_code, base_row)
@@ -2469,6 +2505,7 @@ def chat(req: ChatRequest, request: Request):
                 "answer": _ensure_language("Ik heb nog even de context nodig: bij welke vraag hoort deze keuze? Kies opnieuw bij de vorige vraag, of stuur je keuze met de contextvraag mee.", lang_code),
                 "need_ref": True,
                 "citations": [],
+                "source": "faq"
             }
             return _add_suggestions_to_response(response, q, lang_code, None)
 
@@ -2502,6 +2539,7 @@ def chat(req: ChatRequest, request: Request):
             "answer": _ensure_language(message, lang_code),
             "clarify": {"ref": q, "options": options, "tips": []},
             "citations": [],
+            "source": "faq"
         }
         return _add_suggestions_to_response(response, q, lang_code, None)
     if matched_row:
@@ -2551,6 +2589,7 @@ def chat(req: ChatRequest, request: Request):
             "answer": _ensure_language("Hebt u een Gen 1 of een Gen 2 apparaat?", lang_code),
             "clarify": {"ref": q, "options": options, "tips": GEN_TIPS_NL},
             "citations": [],
+            "source": "rag"
         }
         return _add_suggestions_to_response(response, q, lang_code, None)
 
@@ -2558,6 +2597,7 @@ def chat(req: ChatRequest, request: Request):
         response = {
             "answer": _ensure_language("Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?", lang_code),
             "citations": [],
+            "source": "rag"
         }
         return _add_suggestions_to_response(response, q, lang_code, None)
 
@@ -2567,8 +2607,9 @@ def chat(req: ChatRequest, request: Request):
         response = {
             "answer": _ensure_language("Ik kan momenteel geen automatisch antwoord genereren. Kun je je vraag op een andere manier formuleren of meer details geven?", lang_code),
             "citations": [],
+            "source": "rag"
         }
         return _add_suggestions_to_response(response, q, lang_code, None)
 
-    response = {"answer": answer, "citations": citations}
+    response = {"answer": answer, "citations": citations, "source": "rag"}
     return _add_suggestions_to_response(response, q, lang_code, None)
