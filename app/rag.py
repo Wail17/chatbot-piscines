@@ -35,6 +35,14 @@ from .config import (
 )
 from .utils import normalize_text, normalize_language_code, log_error
 
+# Import JSONL FAQ manager
+try:
+    from .faq_jsonl import get_faq_manager, DEFAULT_FAQ_JSONL
+    JSONL_AVAILABLE = True
+except ImportError:
+    JSONL_AVAILABLE = False
+    logger.warning("FAQ JSONL module not available")
+
 logger = logging.getLogger(__name__)
 
 # OpenAI client initialization with robust error handling
@@ -435,6 +443,18 @@ def _expand_queries_with_llm(question: str, n: int = 3) -> List[str]:
 def _get_vs() -> Chroma:
     """Get or create Chroma vector store instance."""
     try:
+        # Try to use JSONL FAQ manager first
+        if JSONL_AVAILABLE:
+            try:
+                manager = get_faq_manager()
+                vs = manager.get_vectorstore()
+                if vs is not None:
+                    logger.debug("Using JSONL FAQ vectorstore")
+                    return vs
+            except Exception as e:
+                logger.warning(f"JSONL vectorstore not available: {e}")
+
+        # Fallback to direct Chroma connection
         return Chroma(
             persist_directory=CHROMA_DIR,
             collection_name=COLLECTION_NAME,
@@ -1107,3 +1127,151 @@ def get_intelligent_suggestions(
     logger.info(f"Validated {len(validated)}/{len(suggestions)} suggestions")
 
     return validated[:top_k]
+
+
+# ============================================================================
+# JSONL FAQ INITIALIZATION
+# ============================================================================
+
+def initialize_faq_jsonl(jsonl_path: str = DEFAULT_FAQ_JSONL, rebuild_embeddings: bool = False) -> Dict[str, Any]:
+    """
+    Initialize FAQ from JSONL file and build embeddings.
+
+    This is the main initialization function for the JSONL-based FAQ system.
+    Call this at startup or when FAQ is updated.
+
+    Args:
+        jsonl_path: Path to FAQ JSONL file
+        rebuild_embeddings: Force rebuild embeddings
+
+    Returns:
+        Dictionary with initialization status and stats
+    """
+    if not JSONL_AVAILABLE:
+        return {
+            "success": False,
+            "error": "JSONL FAQ module not available"
+        }
+
+    try:
+        logger.info("Initializing JSONL FAQ system...")
+
+        # Get FAQ manager
+        manager = get_faq_manager(jsonl_path)
+
+        # Load FAQ entries
+        entries = manager.load_faq()
+
+        if not entries:
+            logger.warning("No FAQ entries loaded")
+            return {
+                "success": False,
+                "error": "No FAQ entries found",
+                "entries_count": 0
+            }
+
+        logger.info(f"Loaded {len(entries)} FAQ entries")
+
+        # Build embeddings
+        if rebuild_embeddings or manager.vectorstore is None:
+            logger.info("Building embeddings...")
+            success = manager.build_embeddings(force_rebuild=rebuild_embeddings)
+
+            if not success:
+                return {
+                    "success": False,
+                    "error": "Failed to build embeddings",
+                    "entries_count": len(entries)
+                }
+
+        # Get stats
+        stats = manager.get_stats()
+
+        logger.info(f"✅ FAQ JSONL system initialized: {stats['total_entries']} entries")
+
+        return {
+            "success": True,
+            "entries_count": stats['total_entries'],
+            "stats": stats,
+            "message": "FAQ JSONL system ready"
+        }
+
+    except Exception as e:
+        log_error(e, "Failed to initialize FAQ JSONL")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def update_faq_entry(question: str, new_answer: str) -> Dict[str, Any]:
+    """
+    Update an FAQ entry and rebuild embeddings.
+
+    Args:
+        question: Question text to update
+        new_answer: New answer text
+
+    Returns:
+        Dictionary with update status
+    """
+    if not JSONL_AVAILABLE:
+        return {
+            "success": False,
+            "error": "JSONL FAQ module not available"
+        }
+
+    try:
+        from .faq_jsonl import update_faq_jsonl
+
+        logger.info(f"Updating FAQ entry: {question[:50]}...")
+
+        success = update_faq_jsonl(question, new_answer)
+
+        if success:
+            logger.info("✅ FAQ entry updated and embeddings rebuilt")
+            return {
+                "success": True,
+                "message": "FAQ entry updated successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to update FAQ entry"
+            }
+
+    except Exception as e:
+        log_error(e, "Failed to update FAQ entry", question=question[:50])
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def get_faq_stats() -> Dict[str, Any]:
+    """
+    Get FAQ statistics.
+
+    Returns:
+        Dictionary with FAQ stats
+    """
+    if not JSONL_AVAILABLE:
+        return {
+            "system": "legacy",
+            "available": False
+        }
+
+    try:
+        manager = get_faq_manager()
+        stats = manager.get_stats()
+        stats["system"] = "jsonl"
+        stats["available"] = True
+        return stats
+
+    except Exception as e:
+        log_error(e, "Failed to get FAQ stats")
+        return {
+            "system": "jsonl",
+            "available": False,
+            "error": str(e)
+        }
