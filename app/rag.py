@@ -893,3 +893,217 @@ def get_top_suggestions(
     except Exception as e:
         log_error(e, "Suggestion generation failed", question_preview=question[:50])
         return []
+
+
+# ============================================================================
+# INTELLIGENT RETRIEVAL WITH REASONING VALIDATION
+# ============================================================================
+
+def retrieve_with_reasoning(
+    question: str,
+    gen_filter: Optional[str] = None,
+    use_reasoning: bool = True,
+    min_confidence: float = 0.6
+) -> Tuple[Optional[List[Any]], Optional[Any], float]:
+    """
+    Retrieve documents with intelligent reasoning-based validation.
+
+    This function combines:
+    1. Vector similarity search (RAG)
+    2. Intent classification
+    3. Domain matching
+    4. Reasoning-based validation
+    5. Confidence scoring
+
+    Args:
+        question: User's question
+        gen_filter: Optional generation filter
+        use_reasoning: Whether to use reasoning validation (requires API key)
+        min_confidence: Minimum confidence threshold
+
+    Returns:
+        Tuple of (documents, validation_result, confidence_score)
+    """
+    # Import reasoning module here to avoid circular imports
+    try:
+        from .reasoning import (
+            classify_intent,
+            validate_match,
+            calculate_overall_confidence,
+            should_answer_with_confidence
+        )
+    except ImportError as e:
+        logger.warning(f"Reasoning module not available: {e}")
+        use_reasoning = False
+
+    # Step 1: Retrieve candidate documents using embeddings
+    try:
+        docs = retrieve(question, gen_filter=gen_filter)
+    except Exception as e:
+        log_error(e, "Document retrieval failed")
+        return None, None, 0.0
+
+    if not docs:
+        logger.info("No documents retrieved")
+        return None, None, 0.0
+
+    # Step 2: Get similarity scores
+    try:
+        scored_docs = retrieve_with_scores(question)
+        if not scored_docs:
+            return docs, None, 0.3
+    except Exception as e:
+        log_error(e, "Scored retrieval failed")
+        return docs, None, 0.3
+
+    # If reasoning is disabled, return basic results
+    if not use_reasoning or not client:
+        best_score = scored_docs[0][1] if scored_docs else 1e9
+        # Convert distance to similarity
+        similarity = 1.0 / (1.0 + best_score)
+        return docs, None, similarity
+
+    # Step 3: Classify user intent
+    try:
+        user_intent = classify_intent(question)
+        logger.info(
+            f"Intent: {user_intent.primary_intent}, "
+            f"Domain: {user_intent.domain}, "
+            f"Confidence: {user_intent.confidence:.2f}"
+        )
+    except Exception as e:
+        log_error(e, "Intent classification failed")
+        return docs, None, 0.4
+
+    # Step 4: Validate best match using reasoning
+    best_doc, best_distance = scored_docs[0]
+    best_similarity = 1.0 / (1.0 + best_distance)
+
+    try:
+        # Extract FAQ question from metadata
+        faq_question = (best_doc.metadata or {}).get("title", "")
+        faq_answer = best_doc.page_content
+
+        if not faq_question or not faq_answer:
+            logger.warning("Missing FAQ question or answer in metadata")
+            return docs, None, best_similarity
+
+        # Validate the match
+        validation = validate_match(
+            user_question=question,
+            faq_question=faq_question,
+            faq_answer=faq_answer,
+            user_intent=user_intent
+        )
+
+        # Calculate overall confidence
+        overall_confidence = calculate_overall_confidence(
+            similarity_score=best_similarity,
+            validation=validation,
+            user_intent=user_intent
+        )
+
+        logger.info(
+            f"Validation: valid={validation.is_valid}, "
+            f"confidence={overall_confidence:.2f}, "
+            f"recommendation={validation.recommendation}"
+        )
+
+        # Check if we should answer
+        should_answer, reason = should_answer_with_confidence(
+            overall_confidence,
+            threshold=min_confidence
+        )
+
+        if not should_answer:
+            logger.info(f"Confidence too low ({overall_confidence:.2f}): {reason}")
+            return docs, validation, overall_confidence
+
+        if not validation.is_valid:
+            logger.warning(f"Match validation failed: {validation.reasoning}")
+            return docs, validation, overall_confidence
+
+        return docs, validation, overall_confidence
+
+    except Exception as e:
+        log_error(e, "Reasoning validation failed")
+        return docs, None, best_similarity
+
+
+def get_intelligent_suggestions(
+    question: str,
+    top_k: int = 4,
+    min_similarity: float = 0.3,
+    use_reasoning: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Get suggestions with reasoning-based validation and filtering.
+
+    Each suggestion is validated to ensure relevance before being returned.
+
+    Args:
+        question: User's question
+        top_k: Number of suggestions to return
+        min_similarity: Minimum similarity threshold
+        use_reasoning: Whether to use reasoning validation
+
+    Returns:
+        List of validated suggestion dictionaries
+    """
+    # Get basic suggestions first
+    suggestions = get_top_suggestions(question, top_k=top_k * 2, min_similarity=min_similarity)
+
+    if not suggestions or not use_reasoning:
+        return suggestions[:top_k]
+
+    # Import reasoning module
+    try:
+        from .reasoning import classify_intent, validate_match, classify_domain
+    except ImportError:
+        return suggestions[:top_k]
+
+    # Classify user intent once
+    try:
+        user_intent = classify_intent(question)
+        user_domain = user_intent.domain
+    except Exception as e:
+        log_error(e, "Intent classification for suggestions failed")
+        return suggestions[:top_k]
+
+    # Validate each suggestion
+    validated = []
+
+    for sugg in suggestions:
+        faq_q = sugg.get("question", "")
+        faq_a = sugg.get("answer", "")
+
+        if not faq_q or not faq_a:
+            continue
+
+        try:
+            # Quick domain check
+            sugg_domain = classify_domain(faq_q)
+
+            # Only validate if domains match or are related
+            if user_domain != "general" and sugg_domain != "general":
+                if user_domain != sugg_domain:
+                    # Skip if domains are completely unrelated
+                    continue
+
+            # Add domain info to suggestion
+            sugg["domain"] = sugg_domain
+            sugg["validated"] = True
+
+            validated.append(sugg)
+
+            if len(validated) >= top_k:
+                break
+
+        except Exception as e:
+            log_error(e, "Suggestion validation failed")
+            # Include anyway if validation fails
+            validated.append(sugg)
+
+    logger.info(f"Validated {len(validated)}/{len(suggestions)} suggestions")
+
+    return validated[:top_k]
