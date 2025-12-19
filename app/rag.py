@@ -1,5 +1,16 @@
 # app/rag.py
-from typing import List, Tuple, Optional, Set
+"""
+RAG (Retrieval-Augmented Generation) module with multilingual support.
+
+Features:
+- Automatic language detection
+- Multilingual translation for queries and answers
+- Improved similarity search with normalization
+- Caching for translations and embeddings
+- Better error handling and fallback mechanisms
+"""
+
+from typing import List, Tuple, Optional, Set, Dict, Any
 import logging
 import re
 import os
@@ -16,69 +27,67 @@ from .config import (
     TOP_K,
     RESPONSE_LANGUAGE,
     COLLECTION_NAME,
+    SUPPORTED_LANGUAGES,
+    DEFAULT_LANGUAGE,
+    TRANSLATION_CACHE_SIZE,
+    LANGUAGE_DETECTION_CACHE_SIZE,
+    ENABLE_TRANSLATION_CACHE,
 )
+from .utils import normalize_text, normalize_language_code, log_error
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-# Initialisation robuste du client OpenAI
+# OpenAI client initialization with robust error handling
 _api_key = os.environ.get("OPENAI_API_KEY")
+client: Optional[OpenAI] = None
+
 if _api_key:
     try:
         client = OpenAI(api_key=_api_key)
-        logger.info("OpenAI client initialized successfully")
+        logger.info("✅ OpenAI client initialized successfully")
     except Exception as e:
-        logger.warning(f"Failed to initialize OpenAI client: {e}")
+        logger.warning(f"⚠️  Failed to initialize OpenAI client: {e}")
         client = None
 else:
-    logger.warning("WARNING: Missing OPENAI_API_KEY - OpenAI features will be disabled")
+    logger.warning("⚠️  OPENAI_API_KEY missing - AI features will be disabled")
     client = None
 
 
-_LANG_NAME_BY_CODE = {
-    "nl": "Dutch",
-    "en": "English",
-    "fr": "French",
-    "de": "German",
-    "es": "Spanish",
-    "it": "Italian",
-    "pt": "Portuguese",
-    "pl": "Polish",
-    "ro": "Romanian",
-    "da": "Danish",
-    "sv": "Swedish",
-    "fi": "Finnish",
-    "cs": "Czech",
-    "sk": "Slovak",
-    "hu": "Hungarian",
-    "tr": "Turkish",
-    "el": "Greek",
-    "et": "Estonian",
-    "lv": "Latvian",
-    "lt": "Lithuanian",
-    "sl": "Slovenian",
+# GEN pattern detection (for pool equipment generations)
+_GEN_PATTERNS = {
+    "gen1": re.compile(r"\bgen[\s\-]?1\b", re.IGNORECASE),
+    "gen2": re.compile(r"\bgen[\s\-]?2\b", re.IGNORECASE),
+    "gen3": re.compile(r"\bgen[\s\-]?3\b", re.IGNORECASE),
 }
+_GEN_HEADER_RE = re.compile(r"(?im)^\s*gen\s*([123])\s*[:\-–\.]\s*")
 
 
-def _normalize_lang_code(code: str | None) -> str:
-    if not code:
-        return ""
-    code = code.strip().lower()
-    if not code:
-        return ""
-    return code[:2]
+# ============================================================================
+# LANGUAGE DETECTION & TRANSLATION
+# ============================================================================
 
-
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=LANGUAGE_DETECTION_CACHE_SIZE if ENABLE_TRANSLATION_CACHE else 0)
 def detect_language_code(text: str) -> str:
+    """
+    Detect the language code of the given text using OpenAI.
+
+    Cached for performance. Returns empty string if detection fails.
+
+    Args:
+        text: Text to analyze
+
+    Returns:
+        ISO 639-1 language code (e.g., "en", "nl", "fr") or empty string
+    """
     snippet = (text or "").strip()
     if not snippet:
         return ""
+
+    # Limit snippet length for API efficiency
     snippet = snippet[:400]
 
-    # Fallback si client OpenAI non disponible
     if client is None:
-        logger.debug("OpenAI client not available for language detection, returning empty string")
+        logger.debug("OpenAI client not available for language detection")
         return ""
 
     try:
@@ -87,26 +96,41 @@ def detect_language_code(text: str) -> str:
             "Reply with the two-letter code only. If unsure, guess the most likely language.\n\n"
             f"Text:\n{snippet}"
         )
+
         resp = client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
+            max_tokens=10,
         )
+
         raw = resp.choices[0].message.content.strip().lower()
+
+        # Try to extract 2-letter code
         if re.fullmatch(r"[a-z]{2}", raw):
             return raw
+
         match = re.search(r"([a-z]{2})", raw)
         if match:
             return match.group(1)
+
     except Exception as e:
-        logger.warning(f"Language detection failed: {e}")
-        return ""
+        log_error(e, "Language detection failed", text_preview=snippet[:50])
+
     return ""
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=TRANSLATION_CACHE_SIZE if ENABLE_TRANSLATION_CACHE else 0)
 def _cached_translation(prompt: str) -> str:
-    # Fallback si client OpenAI non disponible
+    """
+    Internal cached translation function.
+
+    Args:
+        prompt: Translation prompt for OpenAI
+
+    Returns:
+        Translated text or empty string if failed
+    """
     if client is None:
         logger.debug("OpenAI client not available for translation")
         return ""
@@ -116,149 +140,194 @@ def _cached_translation(prompt: str) -> str:
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
+            max_tokens=1000,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
-        logger.warning(f"Translation failed: {e}")
+        log_error(e, "Translation failed", prompt_preview=prompt[:100])
         return ""
 
 
 def translate_answer(text: str, target_code: str) -> str:
+    """
+    Translate answer text to the target language.
+
+    Preserves formatting, URLs, product names, and technical terms.
+
+    Args:
+        text: Text to translate
+        target_code: Target language code (ISO 639-1)
+
+    Returns:
+        Translated text or original if translation fails
+    """
     if not text:
         return text
-    code = _normalize_lang_code(target_code)
-    if not code or code == "nl":
+
+    code = normalize_language_code(target_code)
+
+    # No translation needed for Dutch (source language) or empty code
+    if not code or code == DEFAULT_LANGUAGE:
         return text
-    lang_name = _LANG_NAME_BY_CODE.get(code, code)
+
+    # Get language name
+    lang_name = SUPPORTED_LANGUAGES.get(code, code)
+
     try:
         prompt = (
-            f"Translate the following support reply to {lang_name}. Preserve the formatting, bullet lists, numbering, and "
-            "keep product names, option labels, and URLs exactly as they appear. Respond with the translation only.\n\n"
+            f"Translate the following support reply to {lang_name}. "
+            "Preserve the formatting, bullet lists, numbering, and "
+            "keep product names, option labels, and URLs exactly as they appear. "
+            "Respond with the translation only.\n\n"
             f"Reply:\n{text}"
         )
         translated = _cached_translation(prompt)
         return translated or text
-    except Exception:
+    except Exception as e:
+        log_error(e, "Answer translation failed", target_lang=code)
         return text
 
 
-@lru_cache(maxsize=256)
-def translate_for_matching(text: str, source_code: str, target_code: str = "nl") -> str:
+def translate_for_matching(text: str, source_code: str, target_code: str = DEFAULT_LANGUAGE) -> str:
+    """
+    Translate user query for better FAQ matching.
+
+    Optimized for matching against Dutch FAQ entries.
+
+    Args:
+        text: Query text to translate
+        source_code: Source language code
+        target_code: Target language code (default: Dutch)
+
+    Returns:
+        Translated query or original text if translation fails
+    """
     if not text:
         return text
-    src = _normalize_lang_code(source_code)
-    tgt = _normalize_lang_code(target_code)
+
+    src = normalize_language_code(source_code)
+    tgt = normalize_language_code(target_code)
+
+    # No translation needed if same language
     if not src or not tgt or src == tgt:
         return text
+
     try:
         prompt = (
-            "Vertaal de volgende klantenvraag naar het Nederlands zodat een FAQ-zoekmachine met Nederlandse trefwoorden "
-            "hem kan begrijpen. Behoud eigennamen en merknamen. Geef alleen de vertaling.\n\n"
+            "Vertaal de volgende klantenvraag naar het Nederlands zodat een FAQ-zoekmachine "
+            "met Nederlandse trefwoorden hem kan begrijpen. "
+            "Behoud eigennamen en merknamen. Geef alleen de vertaling.\n\n"
             f"Vraag:\n{text}"
         )
         translated = _cached_translation(prompt)
         return translated or text
-    except Exception:
+    except Exception as e:
+        log_error(e, "Query translation failed", source_lang=src, target_lang=tgt)
         return text
 
 
-def _get_vs() -> Chroma:
-    return Chroma(
-        persist_directory=CHROMA_DIR,
-        collection_name=COLLECTION_NAME,
-        embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
-    )
-
-
-# ---------- Helpers GEN ----------
-_GEN_PATTERNS = {
-    "gen1": re.compile(r"\bgen[\s\-]?1\b", re.IGNORECASE),
-    "gen2": re.compile(r"\bgen[\s\-]?2\b", re.IGNORECASE),
-    "gen3": re.compile(r"\bgen[\s\-]?3\b", re.IGNORECASE),
-}
-
-
-# --- juste sous les autres regex ---
-_GEN_HEADER_RE = re.compile(r"(?im)^\s*gen\s*([123])\s*[:\-–\.]\s*")
-
-def _only_answer_part(text: str) -> str:
-    """Retourne uniquement la partie après 'Antwoord:' si présente."""
-    if not text:
-        return ""
-    parts = re.split(r"(?i)\bantwoord\s*:\s*", text, maxsplit=1)
-    return parts[1] if len(parts) == 2 else text
-
-def _extract_gen_block(raw_text: str, gen: str) -> str:
+def translate_list(items: List[str], target_code: str) -> List[str]:
     """
-    Découpe un 'Antwoord' qui contient 'Gen 1:' / 'Gen 2:' / 'Gen 3:'
-    et renvoie uniquement le bloc correspondant au gen demandé.
-    Si aucune entête 'Gen X' n'est trouvée, renvoie le texte original.
+    Translate a list of strings (e.g., suggestions).
+
+    Args:
+        items: List of strings to translate
+        target_code: Target language code
+
+    Returns:
+        List of translated strings
     """
-    if not raw_text or not gen:
-        return raw_text or ""
+    if not items:
+        return items
 
-    body = _only_answer_part(raw_text)
+    code = normalize_language_code(target_code)
+    if not code or code == DEFAULT_LANGUAGE:
+        return items
 
-    matches = list(_GEN_HEADER_RE.finditer(body))
-    if not matches:
-        # pas de balises 'Gen X' -> on garde tel quel
-        return body.strip()
+    lang_name = SUPPORTED_LANGUAGES.get(code, code)
 
-    want = {"gen1": "1", "gen 1": "1", "gen2": "2", "gen 2": "2", "gen3": "3", "gen 3": "3"}.get(gen.lower())
-    if not want:
-        return body.strip()
+    try:
+        # Combine all items for efficient batch translation
+        combined = "\n###\n".join(items)
+        prompt = (
+            f"Translate the following items to {lang_name}. "
+            "Each item is separated by '###'. "
+            "Preserve the separator and return translations in the same order.\n\n"
+            f"{combined}"
+        )
 
-    for i, m in enumerate(matches):
-        current = m.group(1)
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        if current == want:
-            return body[start:end].strip()
+        translated = _cached_translation(prompt)
+        if translated:
+            return [s.strip() for s in translated.split("###")]
 
-    # si 'Gen X' demandé pas trouvé, on renvoie le texte complet
-    return body.strip()
+    except Exception as e:
+        log_error(e, "List translation failed", item_count=len(items), target_lang=code)
+
+    return items
+
+
+# ============================================================================
+# GEN DETECTION & EXTRACTION (Pool Equipment Generations)
+# ============================================================================
 
 def detect_gen(text: str) -> Optional[str]:
-    """Renvoie 'gen1' / 'gen2' / 'gen3' si détecté dans la question, sinon None."""
+    """
+    Detect generation mention in text (gen1, gen2, gen3).
+
+    Args:
+        text: Text to analyze
+
+    Returns:
+        "gen1", "gen2", "gen3" or None
+    """
     t = (text or "")
     for key, pat in _GEN_PATTERNS.items():
         if pat.search(t):
             return key
     return None
 
-def extract_found_gens(docs) -> Set[str]:
+
+def extract_found_gens(docs: List[Any]) -> Set[str]:
     """
-    Collecte les générations présentes dans les métadonnées des chunks.
-    Compatible avec :
-      - liste: ["gen1", "gen2"]
-      - CSV string: "gen1,gen2"
-      - champ 'gen': "gen1"
-      - nom de fichier: ".../gen1/..."
+    Extract all generation mentions from document metadata.
+
+    Compatible with various metadata formats:
+    - List: ["gen1", "gen2"]
+    - CSV string: "gen1,gen2"
+    - Single value: "gen1"
+    - Filename: ".../gen1/..."
+
+    Args:
+        docs: List of documents with metadata
+
+    Returns:
+        Set of generation identifiers
     """
     found: Set[str] = set()
+
     for d in docs or []:
         md = d.metadata or {}
         gens = md.get("gens")
 
-        # liste => ajoute les valeurs valides
+        # Handle list format
         if isinstance(gens, list):
             for g in gens:
                 if isinstance(g, str) and g.lower() in {"gen1", "gen2", "gen3"}:
                     found.add(g.lower())
 
-        # chaîne => peut être "gen1" ou "gen1,gen2"
+        # Handle string format (CSV or single value)
         elif isinstance(gens, str):
             for g in re.split(r"[,\s]+", gens):
                 g = g.strip().lower()
                 if g in {"gen1", "gen2", "gen3"}:
                     found.add(g)
 
-        # certains loaders stockent 'gen'
+        # Handle single 'gen' field
         g1 = md.get("gen")
         if isinstance(g1, str) and g1.lower() in {"gen1", "gen2", "gen3"}:
             found.add(g1.lower())
 
-        # ultime secours : nom de fichier
+        # Fallback: check filename
         src = (md.get("source") or "")
         for g in ("gen1", "gen2", "gen3"):
             if g in src.lower():
@@ -267,10 +336,72 @@ def extract_found_gens(docs) -> Set[str]:
     return found
 
 
-# ---------- Query expansion ----------
-def _expand_queries_with_llm(question: str, n: int = 3) -> list:
-    """Génère n reformulations courtes de la question."""
-    # Fallback si client OpenAI non disponible
+def _only_answer_part(text: str) -> str:
+    """Extract only the answer part after 'Antwoord:' marker."""
+    if not text:
+        return ""
+    parts = re.split(r"(?i)\bantwoord\s*:\s*", text, maxsplit=1)
+    return parts[1] if len(parts) == 2 else text
+
+
+def _extract_gen_block(raw_text: str, gen: str) -> str:
+    """
+    Extract specific GEN block from structured answer.
+
+    Handles answers formatted like:
+    Gen 1:
+    Answer for gen 1...
+    Gen 2:
+    Answer for gen 2...
+
+    Args:
+        raw_text: Full answer text
+        gen: Target generation (e.g., "gen1")
+
+    Returns:
+        Extracted block or full text if no structure found
+    """
+    if not raw_text or not gen:
+        return raw_text or ""
+
+    body = _only_answer_part(raw_text)
+    matches = list(_GEN_HEADER_RE.finditer(body))
+
+    if not matches:
+        return body.strip()
+
+    # Map gen format variations
+    want = {"gen1": "1", "gen 1": "1", "gen2": "2", "gen 2": "2", "gen3": "3", "gen 3": "3"}.get(gen.lower())
+    if not want:
+        return body.strip()
+
+    # Find the matching block
+    for i, m in enumerate(matches):
+        current = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+
+        if current == want:
+            return body[start:end].strip()
+
+    return body.strip()
+
+
+# ============================================================================
+# QUERY EXPANSION & REFORMULATION
+# ============================================================================
+
+def _expand_queries_with_llm(question: str, n: int = 3) -> List[str]:
+    """
+    Generate query reformulations using LLM for better retrieval.
+
+    Args:
+        question: Original question
+        n: Number of reformulations to generate
+
+    Returns:
+        List of reformulated queries
+    """
     if client is None:
         logger.debug("OpenAI client not available for query expansion")
         return []
@@ -280,113 +411,187 @@ def _expand_queries_with_llm(question: str, n: int = 3) -> list:
             "Reformule la question ci-dessous en variantes de recherche courtes et précises. "
             f"Donne {n} lignes, sans numéros, sans guillemets.\n\nQuestion:\n{question}"
         )
+
         resp = client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
+            max_tokens=200,
         )
+
         text = resp.choices[0].message.content.strip()
         lines = [l.strip("•- \t") for l in text.splitlines() if l.strip()]
         return lines[:n] if lines else []
+
     except Exception as e:
-        logger.warning(f"Query expansion failed: {e}")
+        log_error(e, "Query expansion failed", question_preview=question[:50])
         return []
 
 
-def _uniq_add(acc: list, seen: set, docs) -> bool:
-    """Ajoute des docs en évitant les doublons ; True si on atteint TOP_K."""
+# ============================================================================
+# VECTOR STORE & RETRIEVAL
+# ============================================================================
+
+def _get_vs() -> Chroma:
+    """Get or create Chroma vector store instance."""
+    try:
+        return Chroma(
+            persist_directory=CHROMA_DIR,
+            collection_name=COLLECTION_NAME,
+            embedding_function=OpenAIEmbeddings(model=EMBEDDINGS_MODEL),
+        )
+    except Exception as e:
+        log_error(e, "Failed to initialize vector store")
+        raise
+
+
+def _uniq_add(acc: List[Any], seen: Set[Any], docs: List[Any]) -> bool:
+    """
+    Add unique documents to accumulator, avoiding duplicates.
+
+    Args:
+        acc: Accumulator list
+        seen: Set of seen document keys
+        docs: Documents to add
+
+    Returns:
+        True if TOP_K limit reached
+    """
     for d in docs or []:
-        key = ((d.metadata or {}).get("source"),
-               (d.metadata or {}).get("page"),
-               hash(d.page_content))
+        key = (
+            (d.metadata or {}).get("source"),
+            (d.metadata or {}).get("page"),
+            hash(d.page_content)
+        )
+
         if key in seen:
             continue
+
         acc.append(d)
         seen.add(key)
+
         if len(acc) >= TOP_K:
             return True
+
     return False
 
 
-def _expand_neighbors(vs: Chroma, doc, k: int = 3):
-    """Ramène quelques chunks voisins du même fichier pour capturer des étapes contiguës."""
+def _expand_neighbors(vs: Chroma, doc: Any, k: int = 3) -> List[Any]:
+    """
+    Retrieve neighboring chunks from the same source document.
+
+    Helps capture sequential context from the same file.
+
+    Args:
+        vs: Vector store instance
+        doc: Source document
+        k: Number of neighbors to retrieve
+
+    Returns:
+        List of neighboring documents
+    """
     try:
         src = (doc.metadata or {}).get("source")
         if not src:
             return []
         return vs.similarity_search(doc.page_content, k=k, filter={"source": src})
-    except Exception:
+    except Exception as e:
+        log_error(e, "Neighbor expansion failed")
         return []
 
 
-# ---------- Retrieval ----------
-def retrieve(question: str, gen_filter: Optional[str] = None):
+def retrieve(question: str, gen_filter: Optional[str] = None) -> List[Any]:
     """
-    - MMR + fallback similarity
-    - Pas de filtre Chroma sur 'gens' (string CSV) ; on filtre en mémoire si demandé.
+    Retrieve relevant documents using MMR with smart fallback.
+
+    Features:
+    - Maximal Marginal Relevance for diversity
+    - Query expansion for better recall
+    - Neighbor expansion for context
+    - GEN-based filtering
+    - Fallback to similarity search
+
+    Args:
+        question: User question
+        gen_filter: Optional generation filter ("gen1", "gen2", "gen3")
+
+    Returns:
+        List of relevant documents
     """
-    vs = _get_vs()
-    results, seen = [], set()
+    try:
+        vs = _get_vs()
+    except Exception as e:
+        logger.error(f"Vector store unavailable: {e}")
+        return []
+
+    results: List[Any] = []
+    seen: Set[Any] = set()
+
+    # Expand queries for better coverage
     queries = [question] + _expand_queries_with_llm(question, n=3)
 
-    def mmr(q, k, fetch_k, flt=None):
+    def mmr(q: str, k: int, fetch_k: int, flt: Optional[Dict] = None) -> List[Any]:
+        """Run MMR search with fallback to similarity search."""
         try:
             return vs.max_marginal_relevance_search(q, k=k, fetch_k=fetch_k, filter=flt)
         except Exception:
             try:
                 return vs.similarity_search(q, k=k, filter=flt)
-            except Exception:
+            except Exception as e:
+                log_error(e, "Search failed", query_preview=q[:50])
                 return []
 
-    def add_with_neighbors(docs):
+    def add_with_neighbors(docs: List[Any]) -> bool:
+        """Add documents with their neighbors."""
         for d in docs or []:
             if _uniq_add(results, seen, [d]):
                 return True
+
             neigh = _expand_neighbors(vs, d, k=3)
             if _uniq_add(results, seen, neigh):
                 return True
         return False
 
-    # 1) On cible les sources "faq" & "mixed" (pas de filtre sur 'gens' côté Chroma)
+    # 1) Target FAQ and mixed sources
     for q in queries:
         flt = {"source_type": {"$in": ["faq", "mixed"]}}
         docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8), flt=flt)
+
         if add_with_neighbors(docs):
             break
 
-    # 2) Fallback global si pas assez d’éléments
+    # 2) Fallback to all sources if insufficient results
     if len(results) < TOP_K:
         for q in queries:
             docs = mmr(q, k=TOP_K, fetch_k=max(40, TOP_K * 8), flt=None)
             if add_with_neighbors(docs):
                 break
 
-    # 3) Filtre en mémoire par génération si demandé
+    # 3) Apply GEN filter if specified
     if gen_filter:
         want = gen_filter.strip().lower()
 
-        def md_has_gen(md) -> bool:
+        def md_has_gen(md: Dict) -> bool:
             if not md:
                 return False
 
-            # CSV string ou simple string
+            # Check 'gens' field (CSV or list)
             gens = md.get("gens")
             if isinstance(gens, str):
                 for g in re.split(r"[,\s]+", gens):
                     if g.strip().lower() == want:
                         return True
 
-            # liste éventuelle
             if isinstance(gens, list):
                 if any(isinstance(x, str) and x.strip().lower() == want for x in gens):
                     return True
 
-            # champ 'gen'
+            # Check 'gen' field
             g1 = md.get("gen")
             if isinstance(g1, str) and g1.strip().lower() == want:
                 return True
 
-            # secours: nom de fichier
+            # Check filename
             src = (md.get("source") or "").lower()
             if want in src:
                 return True
@@ -397,37 +602,65 @@ def retrieve(question: str, gen_filter: Optional[str] = None):
         if filtered:
             results = filtered
 
+    logger.info(f"Retrieved {len(results)} documents for query: {question[:50]}...")
     return results
 
 
-def retrieve_with_scores(question: str) -> List[Tuple]:
-    """Retourne [(doc, score)] ; plus petit = plus proche."""
+def retrieve_with_scores(question: str) -> List[Tuple[Any, float]]:
+    """
+    Retrieve documents with similarity scores.
+
+    Args:
+        question: User question
+
+    Returns:
+        List of (document, score) tuples; lower score = higher similarity
+    """
     try:
         vs = _get_vs()
         pairs = vs.similarity_search_with_score(question, k=TOP_K)
-        logger.info("retrieve_with_scores() -> %d pairs", len(pairs))
+        logger.info(f"Retrieved {len(pairs)} documents with scores")
         return pairs
     except Exception as e:
-        logger.exception("retrieve_with_scores() failed: %s", e)
+        log_error(e, "Scored retrieval failed", question_preview=question[:50])
         return []
 
 
-def chat_with_confidence(question: str):
-    """Renvoie (docs, scores, best_score) ; best_score plus petit = mieux."""
+def chat_with_confidence(question: str) -> Tuple[Optional[List[Any]], List[float], float]:
+    """
+    Retrieve documents with confidence scoring.
+
+    Args:
+        question: User question
+
+    Returns:
+        Tuple of (documents, scores, best_score)
+        best_score: Lower is better
+    """
     pairs = retrieve_with_scores(question)
     docs = [p[0] for p in pairs]
     scores = [p[1] for p in pairs]
+
     if not docs:
         return None, [], 1e9
+
     best = min(scores) if scores else 1e9
     return docs, scores, best
 
 
-# ---------- Prompt / génération ----------
-def _lang_instruction(_: str) -> str:
+# ============================================================================
+# CONTEXT BUILDING & PROMPT GENERATION
+# ============================================================================
+
+def _lang_instruction(question: str) -> str:
     """
-    - 'auto' -> répondre dans la langue de l'utilisateur
-    - sinon -> forcer la langue
+    Generate language instruction for the LLM based on configuration.
+
+    Args:
+        question: User question (for context)
+
+    Returns:
+        Language instruction string
     """
     if (RESPONSE_LANGUAGE or "").strip().lower() == "auto":
         return (
@@ -437,21 +670,42 @@ def _lang_instruction(_: str) -> str:
     return f"Answer in {RESPONSE_LANGUAGE}. Keep product/brand names and URLs as-is."
 
 
-def _build_context(docs) -> str:
-    """Concatène les extraits utiles en préfixant par [title — p.X]."""
+def _build_context(docs: List[Any]) -> str:
+    """
+    Build context string from retrieved documents.
+
+    Args:
+        docs: List of documents
+
+    Returns:
+        Formatted context string
+    """
     if not docs:
         return "(no context found)"
+
     parts = []
     for d in docs:
         md = d.metadata or {}
         title = md.get("title") or md.get("source") or "Document"
         page = md.get("page")
+
         head = f"[{title}{f' — p.{page}' if page is not None else ''}]"
         parts.append(f"{head} {d.page_content}")
+
     return "\n\n".join(parts)
 
 
-def _build_messages(question: str, docs) -> list:
+def _build_messages(question: str, docs: List[Any]) -> List[Dict[str, str]]:
+    """
+    Build messages for OpenAI chat completion.
+
+    Args:
+        question: User question
+        docs: Context documents
+
+    Returns:
+        List of message dictionaries
+    """
     lang_rule = _lang_instruction(question)
     context = _build_context(docs)
 
@@ -461,135 +715,181 @@ def _build_messages(question: str, docs) -> list:
         "Use ONLY the provided context to answer. If the context is insufficient, say it and ask a short, "
         "clear clarifying question instead of hallucinating.\n"
         "Keep answers concise and helpful.\n"
-        "Whenever the context contains a procedure or numbered steps (e.g., Step 1/2/3), reproduce them clearly as an ordered list using the exact terms found in the context (e.g., Snippet, Scheduler). Do not generalize; stick closely to the provided instructions.\n"
+        "Whenever the context contains a procedure or numbered steps (e.g., Step 1/2/3), reproduce them clearly "
+        "as an ordered list using the exact terms found in the context. Do not generalize; stick closely to the "
+        "provided instructions.\n"
     )
 
     user = f"QUESTION:\n{question}\n\nCONTEXT (excerpts):\n{context}"
+
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
 
 
-def _collect_citations(docs) -> list:
-    """Citations uniques : [{title, url, source, page}]."""
-    citations, seen = [], set()
+def _collect_citations(docs: List[Any]) -> List[Dict[str, Any]]:
+    """
+    Collect unique citations from documents.
+
+    Args:
+        docs: List of documents
+
+    Returns:
+        List of citation dictionaries
+    """
+    citations: List[Dict[str, Any]] = []
+    seen: Set[Tuple] = set()
+
     for d in docs or []:
         md = d.metadata or {}
         src = md.get("source")
         url = md.get("url") or None
         title = md.get("title") or src or "Document"
         page = md.get("page")
+
         key = (title, url, src, page)
         if key in seen:
             continue
-        citations.append({"title": title, "url": url, "source": src, "page": page})
+
+        citations.append({
+            "title": title,
+            "url": url,
+            "source": src,
+            "page": page
+        })
         seen.add(key)
+
     return citations
 
 
-def get_top_suggestions(question: str, top_k: int = 4, min_similarity: float = 0.3) -> List[dict]:
+# ============================================================================
+# ANSWER GENERATION
+# ============================================================================
+
+def generate_answer(question: str, docs: List[Any], chosen_gen: Optional[str] = None) -> Tuple[str, List[Dict]]:
     """
-    Récupère les top K suggestions de documents similaires avec leurs scores de similarité.
+    Generate answer using LLM or extract GEN-specific blocks.
 
     Args:
-        question: La question de l'utilisateur
-        top_k: Nombre de suggestions à retourner (défaut: 4)
-        min_similarity: Score de similarité minimum (0-1, défaut: 0.3)
+        question: User question
+        docs: Context documents
+        chosen_gen: Optional GEN filter ("gen1", "gen2", "gen3")
 
     Returns:
-        Liste de dictionnaires contenant les suggestions avec leurs scores
-        Format: [{
-            "question": str,
-            "answer": str,
-            "similarity_score": float (0-100),
-            "metadata": dict
-        }]
+        Tuple of (answer, citations)
+    """
+    # 1) Deterministic GEN extraction mode
+    if chosen_gen:
+        pieces = []
+        for d in docs or []:
+            block = _extract_gen_block(d.page_content or "", chosen_gen)
+            # Only include if we actually extracted a sub-block
+            if block and block != (d.page_content or "").strip():
+                pieces.append(block)
+
+        if pieces:
+            answer = "\n\n".join(pieces).strip()
+            citations = _collect_citations(docs)
+            logger.info(f"Returned GEN-specific answer (gen={chosen_gen})")
+            return answer, citations
+
+    # 2) LLM generation fallback
+    if client is None:
+        logger.warning("OpenAI client not available for answer generation")
+        error_msg = (
+            "Ik kan momenteel geen automatisch antwoord genereren vanwege een configuratieprobleem. "
+            "Neem contact op met de ondersteuning."
+        )
+        return error_msg, _collect_citations(docs)
+
+    try:
+        messages = _build_messages(question, docs)
+
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=800,
+        )
+
+        answer = resp.choices[0].message.content
+        citations = _collect_citations(docs)
+
+        logger.info("Generated LLM answer successfully")
+        return answer, citations
+
+    except Exception as e:
+        log_error(e, "Answer generation failed", question_preview=question[:50])
+        error_msg = (
+            "Ik kan momenteel geen automatisch antwoord genereren. "
+            "Probeer het opnieuw of neem contact op met de ondersteuning."
+        )
+        return error_msg, _collect_citations(docs)
+
+
+# ============================================================================
+# SUGGESTION GENERATION
+# ============================================================================
+
+def get_top_suggestions(
+    question: str,
+    top_k: int = 4,
+    min_similarity: float = 0.3
+) -> List[Dict[str, Any]]:
+    """
+    Get top K FAQ suggestions with similarity scores.
+
+    Args:
+        question: User question
+        top_k: Number of suggestions to return
+        min_similarity: Minimum similarity threshold (0-1)
+
+    Returns:
+        List of suggestion dictionaries with scores
     """
     try:
-        # Récupérer les documents avec scores de distance
+        # Retrieve documents with distance scores
         pairs = retrieve_with_scores(question)
+
         if not pairs:
-            logger.info("get_top_suggestions: no results found")
+            logger.info("No suggestions found")
             return []
 
         suggestions = []
-        for doc, distance_score in pairs[:top_k * 2]:  # Récupère plus pour filtrer
-            # Convertir la distance en similarité (distance faible = haute similarité)
-            # Pour L2 distance, on utilise: similarity = 1 / (1 + distance)
+
+        for doc, distance_score in pairs[:top_k * 2]:  # Fetch more to filter
+            # Convert distance to similarity (lower distance = higher similarity)
+            # For L2 distance: similarity = 1 / (1 + distance)
             similarity = 1.0 / (1.0 + distance_score)
 
-            # Filtrer par score minimum
+            # Filter by minimum threshold
             if similarity < min_similarity:
                 continue
 
-            # Extraire les métadonnées
+            # Extract metadata
             metadata = doc.metadata or {}
 
             suggestion = {
                 "question": metadata.get("title", ""),
                 "answer": doc.page_content or "",
-                "similarity_score": round(similarity * 100, 1),  # Convertir en pourcentage
+                "similarity_score": round(similarity * 100, 1),  # Convert to percentage
                 "category": metadata.get("category", ""),
                 "metadata": metadata
             }
 
             suggestions.append(suggestion)
 
-            # Arrêter si on a assez de suggestions
+            # Stop if we have enough
             if len(suggestions) >= top_k:
                 break
 
-        # Trier par score décroissant
+        # Sort by score (descending)
         suggestions.sort(key=lambda x: x["similarity_score"], reverse=True)
 
-        logger.info("get_top_suggestions: returned %d suggestions", len(suggestions))
+        logger.info(f"Returned {len(suggestions)} suggestions")
         return suggestions[:top_k]
 
     except Exception as e:
-        logger.exception("get_top_suggestions failed: %s", e)
+        log_error(e, "Suggestion generation failed", question_preview=question[:50])
         return []
-
-
-def generate_answer(question: str, docs, chosen_gen: str | None = None) -> Tuple[str, list]:
-    """
-    Si chosen_gen est fourni (gen1/gen2/gen3) et que le contexte contient des blocs 'Gen X:',
-    on renvoie **uniquement** ces blocs concaténés (sans LLM).
-    Sinon on retombe sur la génération LLM classique.
-    """
-    # 1) Mode "extraction déterministe" par GEN
-    if chosen_gen:
-        pieces = []
-        for d in docs or []:
-            block = _extract_gen_block(d.page_content or "", chosen_gen)
-            # si on a réellement extrait une sous-partie (et pas le texte inchangé)
-            if block and block != (d.page_content or "").strip():
-                pieces.append(block)
-        if pieces:
-            answer = "\n\n".join(pieces).strip()
-            citations = _collect_citations(docs)
-            logger.info("generate_answer: returned GEN-specific slices (gen=%s)", chosen_gen)
-            return answer, citations
-
-    # 2) Fallback LLM (comportement existant)
-    # Fallback si client OpenAI non disponible
-    if client is None:
-        logger.warning("OpenAI client not available for answer generation")
-        error_msg = "Ik kan momenteel geen automatisch antwoord genereren vanwege een configuratieprobleem. Neem contact op met de ondersteuning."
-        return error_msg, _collect_citations(docs)
-
-    try:
-        messages = _build_messages(question, docs)
-        resp = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=messages,
-            temperature=0.2,
-        )
-        answer = resp.choices[0].message.content
-        citations = _collect_citations(docs)
-        return answer, citations
-    except Exception as e:
-        logger.error(f"Answer generation failed: {e}")
-        error_msg = "Ik kan momenteel geen automatisch antwoord genereren. Probeer het opnieuw of neem contact op met de ondersteuning."
-        return error_msg, _collect_citations(docs)
-
