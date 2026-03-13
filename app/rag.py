@@ -41,7 +41,23 @@ try:
     JSONL_AVAILABLE = True
 except ImportError:
     JSONL_AVAILABLE = False
-    logger.warning("FAQ JSONL module not available")
+
+# Import synonym system (always available, no API needed)
+try:
+    from .synonyms import expand_with_synonyms, expand_with_synonyms_fuzzy, normalize_with_synonyms
+    from .keyword_search import keyword_search_as_documents, build_keyword_index
+    SYNONYMS_AVAILABLE = True
+except ImportError:
+    SYNONYMS_AVAILABLE = False
+
+    def expand_with_synonyms(text: str, **kwargs) -> str:  # type: ignore
+        return text
+
+    def expand_with_synonyms_fuzzy(text: str, **kwargs) -> str:  # type: ignore
+        return text
+
+    def normalize_with_synonyms(text: str) -> str:  # type: ignore
+        return text
 
 logger = logging.getLogger(__name__)
 
@@ -525,30 +541,49 @@ def retrieve(question: str, gen_filter: Optional[str] = None) -> List[Any]:
     Retrieve relevant documents using MMR with smart fallback.
 
     Features:
+    - Synonym expansion (NL/FR/EN) so "zuurtegraad" == "pH" == "acidité"
     - Maximal Marginal Relevance for diversity
     - Query expansion for better recall
     - Neighbor expansion for context
     - GEN-based filtering
-    - Fallback to similarity search
+    - Keyword search fallback when vector store unavailable
 
     Args:
-        question: User question
+        question: User question (any language/phrasing)
         gen_filter: Optional generation filter ("gen1", "gen2", "gen3")
 
     Returns:
         List of relevant documents
     """
+    # ── Synonym expansion (with fuzzy matching for typos) ─────────────────────
+    # Enrich the query with synonyms so different phrasings match the same FAQ.
+    # Also handles typos: "kaliibrate" still matches "kalibreren"
+    # Example: "acidity" → "acidity ph zuurtegraad acidite acid level ..."
+    if SYNONYMS_AVAILABLE:
+        question_expanded = expand_with_synonyms_fuzzy(question)
+        if question_expanded != question:
+            logger.debug(f"Synonym expansion: '{question[:50]}' → '{question_expanded[:80]}'")
+    else:
+        question_expanded = question
+
+    # ── Try vector store ──────────────────────────────────────────────────────
     try:
         vs = _get_vs()
     except Exception as e:
-        logger.error(f"Vector store unavailable: {e}")
+        logger.warning(f"Vector store unavailable, falling back to keyword search: {e}")
+        # Keyword fallback: works with NO API, uses synonyms internally
+        if SYNONYMS_AVAILABLE:
+            return keyword_search_as_documents(question, top_k=TOP_K)
         return []
 
     results: List[Any] = []
     seen: Set[Any] = set()
 
-    # Expand queries for better coverage
-    queries = [question] + _expand_queries_with_llm(question, n=3)
+    # Build query list: original + synonym-expanded + LLM reformulations
+    queries = [question_expanded]
+    if question_expanded != question:
+        queries.append(question)  # also try original
+    queries += _expand_queries_with_llm(question, n=2)
 
     def mmr(q: str, k: int, fetch_k: int, flt: Optional[Dict] = None) -> List[Any]:
         """Run MMR search with fallback to similarity search."""
@@ -587,7 +622,19 @@ def retrieve(question: str, gen_filter: Optional[str] = None) -> List[Any]:
             if add_with_neighbors(docs):
                 break
 
-    # 3) Apply GEN filter if specified
+    # 3) Keyword search reinforcement using synonyms
+    # When vector results are insufficient, add keyword matches to fill gaps.
+    # This catches synonym mismatches that embeddings might miss.
+    if SYNONYMS_AVAILABLE and len(results) < max(2, TOP_K // 2):
+        try:
+            kw_docs = keyword_search_as_documents(question, top_k=TOP_K)
+            _uniq_add(results, seen, kw_docs)
+            if kw_docs:
+                logger.debug(f"Keyword search added {len(kw_docs)} docs as reinforcement")
+        except Exception as e:
+            logger.debug(f"Keyword search reinforcement failed: {e}")
+
+    # 4) Apply GEN filter if specified
     if gen_filter:
         want = gen_filter.strip().lower()
 
@@ -1187,11 +1234,20 @@ def initialize_faq_jsonl(jsonl_path: str = DEFAULT_FAQ_JSONL, rebuild_embeddings
         # Get stats
         stats = manager.get_stats()
 
+        # Build keyword index (always built, works without API)
+        if SYNONYMS_AVAILABLE:
+            try:
+                build_keyword_index(entries)
+                logger.info(f"✅ Keyword index built with synonym support ({len(entries)} entries)")
+            except Exception as ke:
+                logger.warning(f"Keyword index build failed (non-critical): {ke}")
+
         logger.info(f"✅ FAQ JSONL system initialized: {stats['total_entries']} entries")
 
         return {
             "success": True,
             "entries_count": stats['total_entries'],
+            "keyword_index": SYNONYMS_AVAILABLE,
             "stats": stats,
             "message": "FAQ JSONL system ready"
         }

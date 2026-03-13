@@ -141,6 +141,13 @@ class FAQJSONLManager:
             self.faq_entries = entries
             logger.info(f"Loaded {len(entries)} FAQ entries from JSONL")
 
+            # Auto-build keyword index with synonym support (no API needed)
+            try:
+                from .keyword_search import build_keyword_index
+                build_keyword_index(entries)
+            except Exception:
+                pass  # Non-critical
+
             return entries
 
         except Exception as e:
