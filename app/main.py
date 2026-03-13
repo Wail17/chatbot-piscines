@@ -1,6 +1,7 @@
 # app/main.py
 from typing import List, Optional, Dict, Any, Set, Tuple
 import os, json, re, unicodedata, time
+import logging
 from math import sqrt
 from threading import Lock
 from difflib import SequenceMatcher, get_close_matches
@@ -29,6 +30,48 @@ from .config import (
     # optionnel si tu veux un /health bavard:
     # CHROMA_DIR, EMBEDDINGS_MODEL, FEEDBACK_FILE, CORRECTIONS_COLLECTION
 )
+
+# ── New feature modules (all optional – graceful degradation) ────────────────
+try:
+    from .response_cache import init_cache, cache_get, cache_set, cache_stats, normalize_for_cache
+    _CACHE_AVAILABLE = True
+except ImportError:
+    _CACHE_AVAILABLE = False
+    def cache_get(q): return None
+    def cache_set(q, r): pass
+    def cache_stats(): return {"enabled": False}
+    def normalize_for_cache(q): return q.lower().strip()
+
+try:
+    from .query_preprocessor import preprocess_query, QueryIntent
+    _PREPROCESSOR_AVAILABLE = True
+except ImportError:
+    _PREPROCESSOR_AVAILABLE = False
+    preprocess_query = None
+
+try:
+    from .analytics import (
+        init_analytics, track_question, track_no_answer,
+        track_cache_hit, track_error, get_analytics_report, get_faq_gaps,
+    )
+    _ANALYTICS_AVAILABLE = True
+except ImportError:
+    _ANALYTICS_AVAILABLE = False
+    def track_question(*a, **kw): pass
+    def track_no_answer(*a, **kw): pass
+    def track_cache_hit(*a, **kw): pass
+    def track_error(*a, **kw): pass
+    def get_analytics_report(*a, **kw): return {}
+    def get_faq_gaps(*a, **kw): return []
+
+try:
+    from .direct_answer import get_direct_answer_with_suggestions
+    _DIRECT_ANSWER_AVAILABLE = True
+except ImportError:
+    _DIRECT_ANSWER_AVAILABLE = False
+    get_direct_answer_with_suggestions = None
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Chatbot Piscines API")
 
@@ -113,18 +156,12 @@ if _api_key:
     try:
         _openai_client = OpenAI(api_key=_api_key)
     except Exception as e:
-        print(f"[WARNING] Failed to initialize OpenAI client: {e}")
+        logger.warning(f"Failed to initialize OpenAI client: {e}")
         _openai_client = None
 else:
-    print("[WARNING] Missing OPENAI_API_KEY - GPT fallback will be disabled")
+    logger.warning("Missing OPENAI_API_KEY - GPT fallback will be disabled")
 
-# Debug logs
-print(f"[DEBUG] FAQ file path: {_FAQ_FALLBACK_JSONL}")
-print(f"[DEBUG] FAQ file exists: {os.path.exists(_FAQ_FALLBACK_JSONL)}")
-if os.path.exists(_FAQ_FALLBACK_JSONL):
-    import os as os_stat
-    file_size = os_stat.path.getsize(_FAQ_FALLBACK_JSONL)
-    print(f"[DEBUG] FAQ file size: {file_size} bytes")
+logger.debug(f"FAQ file path: {_FAQ_FALLBACK_JSONL}, exists: {os.path.exists(_FAQ_FALLBACK_JSONL)}")
 
 
 def _load_faq_from_store() -> List[dict]:
@@ -145,11 +182,9 @@ def _coerce_str(val: Any) -> str:
 
 
 def _load_faq_from_jsonl(path: str) -> List[dict]:
-    print(f"[DEBUG] _load_faq_from_jsonl called with path: {path}")
     if not os.path.exists(path):
-        print(f"[DEBUG] ERROR: Path does not exist: {path}")
+        logger.warning(f"FAQ JSONL not found: {path}")
         return []
-    print(f"[DEBUG] Path exists, starting to read...")
 
     rows: List[dict] = []
     line_count = 0
@@ -249,14 +284,10 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
 
                 rows.append(row)
     except Exception as e:
-        print(f"[DEBUG] ERROR loading FAQ JSONL: {type(e).__name__}: {e}")
+        logger.error(f"ERROR loading FAQ JSONL: {type(e).__name__}: {e}")
         return []
 
-    print(f"[DEBUG] JSONL parsing complete:")
-    print(f"[DEBUG]   - Total lines read: {line_count}")
-    print(f"[DEBUG]   - Parse errors: {skipped_parse_error}")
-    print(f"[DEBUG]   - Empty questions: {skipped_empty_q}")
-    print(f"[DEBUG]   - Valid FAQ items: {len(rows)}")
+    logger.info(f"FAQ loaded: {len(rows)} items ({skipped_parse_error} parse errors, {skipped_empty_q} empty questions)")
     return rows
 
 
@@ -269,24 +300,57 @@ def _reset_faq_embeddings() -> None:
 
 def _reload_faq() -> Tuple[int, List[dict]]:
     data: List[dict] = _load_faq_from_store()
-    print(f"[DEBUG] Loaded from store: {len(data)} items")
     if not data:
-        print(f"[DEBUG] Store empty, loading from JSONL: {_FAQ_FALLBACK_JSONL}")
         data = _load_faq_from_jsonl(_FAQ_FALLBACK_JSONL)
-        print(f"[DEBUG] Loaded from JSONL: {len(data)} items")
     global _FAQ
     _FAQ = data
-    print(f"[DEBUG] FAQ reloaded: {len(_FAQ)} items")
-    if _FAQ:
-        print(f"[DEBUG] First FAQ item: {_FAQ[0]}")
+    if not _FAQ:
+        logger.error("FAQ is empty after reload!")
     else:
-        print(f"[DEBUG] ERROR: _FAQ is empty!")
+        logger.info(f"FAQ reloaded: {len(_FAQ)} items")
     _reset_faq_embeddings()
     for row in _FAQ:
         row["_embedding"] = _EMBED_UNSET
     return (len(_FAQ), _FAQ)
 
 _reload_faq()
+
+# ── Initialize feature modules ──────────────────────────────────────────────
+if _CACHE_AVAILABLE:
+    try:
+        init_cache(store_dir=STORE_DIR)
+    except Exception as _e:
+        logger.warning(f"Cache init failed: {_e}")
+
+if _ANALYTICS_AVAILABLE:
+    try:
+        init_analytics(store_dir=STORE_DIR)
+    except Exception as _e:
+        logger.warning(f"Analytics init failed: {_e}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Simple in-memory rate limiter (per IP, no external deps)
+# ─────────────────────────────────────────────────────────────────────────────
+_RATE_LIMIT_WINDOW = 60      # seconds
+_RATE_LIMIT_MAX = 30         # requests per window per IP
+_rate_store: Dict[str, List[float]] = {}
+_rate_lock = Lock()
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    """Returns True if request is allowed, False if rate limit exceeded."""
+    now = time.time()
+    cutoff = now - _RATE_LIMIT_WINDOW
+    with _rate_lock:
+        timestamps = _rate_store.get(client_ip, [])
+        # Drop old timestamps
+        timestamps = [t for t in timestamps if t > cutoff]
+        if len(timestamps) >= _RATE_LIMIT_MAX:
+            _rate_store[client_ip] = timestamps
+            return False
+        timestamps.append(now)
+        _rate_store[client_ip] = timestamps
+        return True
 
 # ---------------------------------------------------------------------
 # Normalization helpers
@@ -746,7 +810,7 @@ Keep the answer clear and concise."""
         answer = response.choices[0].message.content
         return answer
     except Exception as e:
-        print(f"[ERROR] GPT fallback failed: {e}")
+        logger.error(f"GPT fallback failed: {e}")
         return None
 
 
@@ -1298,120 +1362,52 @@ def _pop_valid_pending(client_id: str) -> dict | None:
 # Matching helpers
 # ---------------------------------------------------------------------
 def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
-    print(f"\n[DEBUG] ========== MATCHING QUESTION ==========")
-    print(f"[DEBUG] User question: '{user_q}'")
-    print(f"[DEBUG] Total FAQ items: {len(_FAQ)}")
-
     if not _FAQ:
-        print("[DEBUG] ERROR: _FAQ is empty!")
         return (None, [])
 
     uq_base, uq_aug = _normalize_query(user_q)
-    print(f"[DEBUG] Normalized base: '{uq_base}'")
-    print(f"[DEBUG] Normalized augmented: '{uq_aug}'")
-
     if not uq_base:
-        print("[DEBUG] ERROR: Normalized query is empty!")
         return (None, [])
 
     direct_matches: List[dict] = []
     query_canon = _canonical_tokens(uq_aug)
-    print(f"[DEBUG] Canonical tokens: {query_canon}")
     row_scores: Dict[int, Tuple[dict, float]] = {}
 
-    # Track all scores for debugging
-    all_scores: List[Tuple[str, float]] = []
-    row_count = 0
-
     for row in _FAQ:
-        row_count += 1
         base_norm, aug_norm = _row_norms(row)
 
-        # Get the question for debugging
-        question_text = row.get("question", "NO_QUESTION_FIELD")
-
-        # Debug first few rows in detail
-        if row_count <= 5:
-            print(f"\n[DEBUG] Row {row_count}:")
-            print(f"[DEBUG]   Question: '{question_text[:80]}...' " if len(str(question_text)) > 80 else f"[DEBUG]   Question: '{question_text}'")
-            print(f"[DEBUG]   base_norm: '{base_norm[:80]}...' " if len(str(base_norm)) > 80 else f"[DEBUG]   base_norm: '{base_norm}'")
-            print(f"[DEBUG]   aug_norm: '{aug_norm[:80]}...' " if len(str(aug_norm)) > 80 else f"[DEBUG]   aug_norm: '{aug_norm}'")
-
         if not base_norm and not aug_norm:
-            if row_count <= 5:
-                print(f"[DEBUG]   SKIPPED: Both norms are empty")
             continue
 
         if base_norm and (
             uq_base == base_norm or (uq_base and (uq_base in base_norm or base_norm in uq_base))
         ):
-            if row_count <= 10:
-                print(f"[DEBUG]   DIRECT MATCH found!")
             direct_matches.append(row)
             continue
 
         score = _similarity(uq_aug, aug_norm)
 
-        # Log score for first few rows
-        if row_count <= 10:
-            print(f"[DEBUG]   Similarity score: {score:.4f}")
-
-        # Store score for debugging (all rows)
-        all_scores.append((question_text[:100] if question_text else "NO_Q", score))
-
-        # REDUCED canonical token penalties - they were too severe!
-        # Old: 0.55 (45% penalty), 0.75 (25% penalty)
-        # New: 0.85 (15% penalty), 0.90 (10% penalty)
         if score > 0.0 and query_canon:
             row_canon = _canonical_tokens(aug_norm)
             if not row_canon:
-                score *= 0.85  # Was 0.55 - too severe!
-                if row_count <= 10:
-                    print(f"[DEBUG]   Score penalty (no canonical): {score:.4f}")
+                score *= 0.85
             else:
                 overlap = len(query_canon & row_canon)
                 coverage = overlap / float(len(query_canon))
                 if coverage < 0.4:
-                    score *= 0.85  # Was 0.55 - too severe!
-                    if row_count <= 10:
-                        print(f"[DEBUG]   Score penalty (low coverage {coverage:.2f}): {score:.4f}")
+                    score *= 0.85
                 elif coverage < 0.65:
-                    score *= 0.90  # Was 0.75 - too severe!
-                    if row_count <= 10:
-                        print(f"[DEBUG]   Score penalty (medium coverage {coverage:.2f}): {score:.4f}")
+                    score *= 0.90
                 else:
                     score = min(1.0, score + min(1.0, coverage) * 0.25)
-                    if row_count <= 10:
-                        print(f"[DEBUG]   Score boost (high coverage {coverage:.2f}): {score:.4f}")
 
         if score > 0.0:
             key = id(row)
             stored = row_scores.get(key)
             if not stored or score > stored[1]:
                 row_scores[key] = (row, score)
-                if row_count <= 10:
-                    print(f"[DEBUG]   STORED in row_scores with score {score:.4f}")
-
-    # Summary after processing all rows
-    print(f"\n[DEBUG] ========== MATCHING SUMMARY ==========")
-    print(f"[DEBUG] Rows processed: {row_count}")
-    print(f"[DEBUG] Direct matches: {len(direct_matches)}")
-    print(f"[DEBUG] Scored rows: {len(row_scores)}")
-
-    # Show top 10 scores
-    all_scores.sort(key=lambda x: x[1], reverse=True)
-    print(f"\n[DEBUG] Top 10 scores (even if below threshold):")
-    for i, (q, s) in enumerate(all_scores[:10], 1):
-        print(f"[DEBUG]   {i}. Score {s:.4f}: {q}")
-
-    print(f"\n[DEBUG] Thresholds:")
-    print(f"[DEBUG]   _MATCH_THRESHOLD = {_MATCH_THRESHOLD}")
-    print(f"[DEBUG]   _SEMANTIC_MATCH_THRESHOLD = {_SEMANTIC_MATCH_THRESHOLD}")
-    print(f"[DEBUG]   _SEMANTIC_TRIGGER = {_SEMANTIC_TRIGGER}")
-    print(f"[DEBUG]   _CERTAINTY_THRESHOLD = {_CERTAINTY_THRESHOLD}")
 
     if direct_matches:
-        print(f"[DEBUG] Returning {len(direct_matches)} direct match(es)")
         if len(direct_matches) == 1:
             return (direct_matches[0], [])
         return (None, direct_matches[:4])
@@ -1420,16 +1416,10 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
     if not need_semantic:
         prelim = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
         if not prelim or prelim[0][1] < _SEMANTIC_TRIGGER:
-            print(f"[DEBUG] Need semantic matching (best score: {prelim[0][1] if prelim else 0:.4f} < {_SEMANTIC_TRIGGER})")
             need_semantic = True
-        else:
-            print(f"[DEBUG] Best preliminary score: {prelim[0][1]:.4f}")
 
     if need_semantic:
-        print(f"[DEBUG] Triggering semantic matching...")
         semantic_scores = _semantic_scores(user_q)
-        print(f"[DEBUG] Semantic matching returned {len(semantic_scores)} scores")
-
         for key, (row, score) in semantic_scores.items():
             stored = row_scores.get(key)
             if stored:
@@ -1438,76 +1428,46 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
             else:
                 row_scores[key] = (row, score)
 
-        print(f"[DEBUG] After semantic: {len(row_scores)} total scored rows")
-
     if not row_scores:
-        print(f"[DEBUG] ERROR: No row_scores found! Returning (None, [])")
         return (None, [])
 
     candidates = sorted(row_scores.values(), key=lambda item: item[1], reverse=True)
-    print(f"[DEBUG] Sorted candidates: {len(candidates)}")
-
     candidates = [item for item in candidates if item[1] > 0.0]
-    print(f"[DEBUG] Candidates with score > 0: {len(candidates)}")
 
     if not candidates:
-        print(f"[DEBUG] ERROR: No candidates with score > 0!")
-        print(f"[DEBUG] Trying FALLBACK simple substring matching...")
-
-        # FALLBACK: Simple substring/token matching for desperate cases
+        # FALLBACK: simple token overlap
         fallback_matches = []
         query_tokens = set(uq_base.split())
-
         for row in _FAQ:
-            question_text = row.get("question", "")
             base_norm, _ = _row_norms(row)
-
             if not base_norm:
                 continue
-
-            # Check for any token overlap
             row_tokens = set(base_norm.split())
             common_tokens = query_tokens & row_tokens
-
             if common_tokens:
                 overlap_ratio = len(common_tokens) / max(len(query_tokens), len(row_tokens))
-                if overlap_ratio > 0.3:  # At least 30% token overlap
+                if overlap_ratio > 0.3:
                     fallback_matches.append((row, overlap_ratio))
-
         if fallback_matches:
             fallback_matches.sort(key=lambda x: x[1], reverse=True)
-            top_fallback = fallback_matches[0]
-            print(f"[DEBUG] FALLBACK found {len(fallback_matches)} matches!")
-            print(f"[DEBUG] Best fallback score: {top_fallback[1]:.4f}")
-            print(f"[DEBUG] Question: {top_fallback[0].get('question', '')[:100]}")
-
-            # Return top fallback match if decent overlap
-            if top_fallback[1] >= 0.4:
-                return (top_fallback[0], [])
-
-        print(f"[DEBUG] No fallback matches found. Returning (None, [])")
+            if fallback_matches[0][1] >= 0.4:
+                return (fallback_matches[0][0], [])
         return (None, [])
+
     top_row, top_score = candidates[0]
     second_score = candidates[1][1] if len(candidates) > 1 else 0.0
-
-    print(f"\n[DEBUG] ========== FINAL DECISION ==========")
-    print(f"[DEBUG] Top score: {top_score:.4f}")
-    print(f"[DEBUG] Second score: {second_score:.4f}")
-    print(f"[DEBUG] Top question: {top_row.get('question', 'NO_Q')[:100]}")
 
     if top_score >= _CERTAINTY_THRESHOLD or (
         top_score >= _MATCH_THRESHOLD and (top_score - second_score) >= _CERTAINTY_GAP
     ):
-        print(f"[DEBUG] MATCH FOUND (certainty or gap)! Returning top row.")
         return (top_row, [])
 
     if top_score < _MATCH_THRESHOLD:
-        print(f"[DEBUG] Top score {top_score:.4f} < threshold {_MATCH_THRESHOLD}. NO MATCH.")
         return (None, [])
 
     if len(candidates) == 1:
-        print(f"[DEBUG] Only one candidate. Returning it.")
         return (top_row, [])
+
     top_base, top_norm = _row_norms(top_row)
     top_tokens = {
         tok
@@ -1544,11 +1504,8 @@ def _match_row_with_clarify(user_q: str) -> Tuple[Optional[dict], List[dict]]:
             ambiguous.append((row, score))
 
     if len(ambiguous) >= 2:
-        print(f"[DEBUG] Found {len(ambiguous)} ambiguous matches. Returning for clarification.")
         return (None, [row for row, _ in ambiguous])
 
-    print(f"[DEBUG] Returning single match (top row).")
-    print(f"[DEBUG] ========== END MATCHING ==========\n")
     return (top_row, [])
 
 def _build_ambiguity_message(rows: List[dict]) -> str:
@@ -1650,7 +1607,7 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
     # Check if FAQ answer is empty or too short/unhelpful - use GPT fallback
     MIN_ANSWER_LENGTH = 30  # Minimum meaningful answer length
     if not direct or len(direct) < MIN_ANSWER_LENGTH:
-        print(f"[DEBUG] FAQ answer empty or too short ({len(direct) if direct else 0} chars), trying GPT fallback...")
+        logger.debug(f"FAQ answer too short ({len(direct) if direct else 0} chars), trying GPT fallback")
         # Try GPT fallback for empty/short FAQ answers
         gpt_answer = _gpt_fallback_answer(user_q or question_ref or "", lang_code)
         if gpt_answer:
@@ -2003,12 +1960,42 @@ def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
 # ---------------------------------------------------------------------
 @app.get("/health")
 def health():
-    return {
+    info: Dict[str, Any] = {
         "status": "ok",
         "faq_rows": len(_FAQ),
-        "faq_file_path": _FAQ_FALLBACK_JSONL,
-        "faq_file_exists": os.path.exists(_FAQ_FALLBACK_JSONL)
+        "faq_file_exists": os.path.exists(_FAQ_FALLBACK_JSONL),
+        "cache": cache_stats(),
+        "features": {
+            "cache": _CACHE_AVAILABLE,
+            "analytics": _ANALYTICS_AVAILABLE,
+            "query_preprocessor": _PREPROCESSOR_AVAILABLE,
+            "direct_answer": _DIRECT_ANSWER_AVAILABLE,
+        },
     }
+    if _ANALYTICS_AVAILABLE:
+        try:
+            report = get_analytics_report(days=1)
+            info["analytics_today"] = report.get("summary", {})
+        except Exception:
+            pass
+    return info
+
+@app.get("/analytics")
+def analytics(days: int = 7):
+    """Return usage analytics report."""
+    if not _ANALYTICS_AVAILABLE:
+        return {"error": "Analytics not available"}
+    return get_analytics_report(days=days)
+
+
+@app.get("/faq/gaps")
+def faq_gaps(min_count: int = 1):
+    """Return questions that were asked but never got a good FAQ answer."""
+    if not _ANALYTICS_AVAILABLE:
+        return {"gaps": [], "note": "Analytics not available"}
+    gaps = get_faq_gaps(min_count=min_count)
+    return {"gaps": gaps, "total": len(gaps)}
+
 
 @app.get("/debug/faq")
 def debug_faq():
@@ -2311,6 +2298,20 @@ def chat(req: ChatRequest, request: Request):
     clarify_ref = (extra.get("clarify_ref") or extra.get("context_question") or "").strip()
     client_id = _client_id_from_request(request)
 
+    # ── Rate limiting ────────────────────────────────────────────────────────
+    if not _check_rate_limit(client_id):
+        raise HTTPException(status_code=429, detail="Te veel verzoeken. Wacht even en probeer opnieuw.")
+
+    # ── Query preprocessor: greetings / thanks / out-of-scope ───────────────
+    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref:
+        try:
+            processed = preprocess_query(q)
+            if processed.immediate_response is not None:
+                # Greeting, thanks, goodbye, out-of-scope → return immediately (no API cost)
+                return processed.immediate_response
+        except Exception as _pe:
+            logger.debug(f"Preprocessor error: {_pe}")
+
     lang_code = detect_language_code(q)
     if not lang_code:
         stored_lang = _language_for_ref(q)
@@ -2324,6 +2325,18 @@ def chat(req: ChatRequest, request: Request):
             lang_code = pending_lang
     if not lang_code:
         lang_code = "nl"
+
+    # ── Track this question in analytics ────────────────────────────────────
+    if q:
+        track_question(q, language=lang_code, source="api")
+
+    # ── Response cache (only for non-clarify requests) ───────────────────────
+    if q and not clarify_ref:
+        cache_key = normalize_for_cache(q)
+        cached = cache_get(cache_key)
+        if cached is not None:
+            track_cache_hit(q)
+            return cached
 
     # ----- MODE SUGGESTIONS MULTIPLES -----
     # Si top_k > 1, utiliser le nouveau système de suggestions multiples
@@ -2509,6 +2522,24 @@ def chat(req: ChatRequest, request: Request):
             }
             return _add_suggestions_to_response(response, q, lang_code, None)
 
+    # ----- 1b) Direct FAQ answer (high-confidence keyword match, no LLM) -----
+    if _DIRECT_ANSWER_AVAILABLE and q and not clarify_ref:
+        try:
+            direct_result = get_direct_answer_with_suggestions(q)
+            if direct_result is not None:
+                response = {
+                    "answer": _ensure_language(direct_result["answer"], lang_code),
+                    "citations": direct_result.get("citations", []),
+                    "source": "direct_faq",
+                    "confidence": direct_result.get("confidence"),
+                }
+                if direct_result.get("suggestions"):
+                    response["suggestions"] = direct_result["suggestions"]
+                cache_set(normalize_for_cache(q), response)
+                return response
+        except Exception as _de:
+            logger.debug(f"Direct answer error: {_de}")
+
     # ----- 2) lookup direct dans l'index
     matched_row, clarify_rows = _match_row_with_clarify(q)
     translated_query = None
@@ -2543,9 +2574,12 @@ def chat(req: ChatRequest, request: Request):
         }
         return _add_suggestions_to_response(response, q, lang_code, None)
     if matched_row:
-        return _respond_for_row(matched_row, lang_code, client_id, q)
+        result = _respond_for_row(matched_row, lang_code, client_id, q)
+        cache_set(normalize_for_cache(q), result)
+        return result
 
     # ----- 3) GPT fallback for intelligent answers
+    track_no_answer(q, language=lang_code)
     gpt_answer = _gpt_fallback_answer(q, lang_code)
     if gpt_answer:
         # Add a note that the answer is AI-generated
@@ -2556,7 +2590,9 @@ def chat(req: ChatRequest, request: Request):
             "citations": [],
             "source": "ai_fallback"
         }
-        return _add_suggestions_to_response(response, q, lang_code, None)
+        result = _add_suggestions_to_response(response, q, lang_code, None)
+        cache_set(normalize_for_cache(q), result)
+        return result
 
     # ----- 4) RAG fallback
     extra_gen = _parse_extra_gen(req.extra)
@@ -2612,4 +2648,6 @@ def chat(req: ChatRequest, request: Request):
         return _add_suggestions_to_response(response, q, lang_code, None)
 
     response = {"answer": answer, "citations": citations, "source": "rag"}
-    return _add_suggestions_to_response(response, q, lang_code, None)
+    result = _add_suggestions_to_response(response, q, lang_code, None)
+    cache_set(normalize_for_cache(q), result)
+    return result
