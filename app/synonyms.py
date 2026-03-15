@@ -205,16 +205,17 @@ SYNONYM_GROUPS: List[Dict] = [
         "category": "measurement",
         "terms": [
             # NL
-            "niveau", "waterniveau", "peil", "waterpeil", "stand",
-            "waterstand", "niveaumeting", "niveauregeling",
+            "niveau", "waterniveau", "peil", "waterpeil", "stand", "hoogte",
+            "waterstand", "waterhoogte", "niveaumeting", "niveauregeling",
             "vlotter", "vlotterschakelaar", "niveauschakelaar",
-            "niveauregelaar", "niveauswitch",
+            "niveauregelaar", "niveauswitch", "niveausensor",
             # FR
-            "niveau", "niveau d'eau", "niveau de l'eau",
-            "flotteur", "interrupteur à flotteur",
+            "niveau", "niveau d'eau", "niveau de l'eau", "hauteur",
+            "hauteur d'eau", "flotteur", "interrupteur à flotteur",
+            "capteur de niveau",
             # EN
-            "level", "water level", "level sensor",
-            "float", "float switch", "level switch",
+            "level", "water level", "level sensor", "water height",
+            "height", "float", "float switch", "level switch",
         ],
     },
 
@@ -255,14 +256,15 @@ SYNONYM_GROUPS: List[Dict] = [
         "category": "device",
         "terms": [
             # NL
-            "pomp", "waterpomp", "circulatiepomp", "filterpomp",
-            "doseerpomp", "peristaltische pomp",
+            "pomp", "pompen", "waterpomp", "circulatiepomp", "filterpomp",
+            "circulatie pomp", "doseerpomp", "peristaltische pomp",
+            "zwembadpomp", "filtratie pomp",
             # FR
-            "pompe", "pompe à eau", "pompe de circulation", "pompe filtration",
-            "pompe doseuse",
+            "pompe", "pompes", "pompe à eau", "pompe de circulation",
+            "pompe circulation", "pompe filtration", "pompe doseuse",
             # EN
-            "pump", "water pump", "circulation pump", "filter pump",
-            "dosing pump",
+            "pump", "pumps", "water pump", "circulation pump", "filter pump",
+            "dosing pump", "pool pump", "filtration pump",
         ],
     },
 
@@ -279,6 +281,23 @@ SYNONYM_GROUPS: List[Dict] = [
             # EN
             "filter", "pool filter", "sand filter", "filtration",
             "filtration system",
+        ],
+    },
+
+    {
+        "canonical": "debiet",
+        "category": "measurement",
+        "terms": [
+            # NL
+            "debiet", "debietmeter", "stroomsnelheid", "flow", "flowmeter",
+            "doorstroom", "waterflow", "waterdebiet", "doorstroming",
+            "stromingssnelheid", "stromingssensor",
+            # FR
+            "debit", "débit", "debitmetre", "débitmètre", "flux",
+            "vitesse d'écoulement", "débit d'eau",
+            # EN
+            "flow", "flow rate", "flowmeter", "flow meter", "flow sensor",
+            "water flow", "flow speed",
         ],
     },
 
@@ -339,15 +358,16 @@ SYNONYM_GROUPS: List[Dict] = [
         "category": "action",
         "terms": [
             # NL
-            "verbinden", "verbinding", "aansluiten", "koppelen",
-            "verbinding maken", "configureren", "instellen",
+            "verbinden", "verbinding", "verbindingen", "aansluiten", "koppelen",
+            "verbinding maken", "configureren", "instellen", "connectie",
+            "connecteren", "aankoppelen", "koppeling",
             "pairen", "pairing",
             # FR
             "connecter", "connexion", "se connecter", "relier",
             "coupler", "associer", "configurer",
             # EN
-            "connect", "connection", "pair", "pairing", "link",
-            "set up connection", "configure",
+            "connect", "connection", "connecting", "pair", "pairing", "link",
+            "linking", "set up connection", "configure",
         ],
     },
 
@@ -629,6 +649,64 @@ SYNONYM_GROUPS: List[Dict] = [
             "bedrade verbinding", "rj45",
             "câble réseau", "câble ethernet",
             "network cable", "wired connection",
+        ],
+    },
+
+    # ── COMMON PHRASES & STATES ───────────────────────────────────────────────
+
+    {
+        "canonical": "te laag",
+        "category": "state",
+        "terms": [
+            # NL
+            "te laag", "laag", "te weinig", "onvoldoende",
+            # FR
+            "trop bas", "trop basse", "bas", "basse", "insuffisant",
+            # EN
+            "too low", "low", "insufficient", "not enough",
+        ],
+    },
+
+    {
+        "canonical": "te hoog",
+        "category": "state",
+        "terms": [
+            # NL
+            "te hoog", "hoog", "te veel", "overmatig",
+            # FR
+            "trop haut", "trop haute", "haut", "haute", "excessif",
+            # EN
+            "too high", "high", "excessive", "too much",
+        ],
+    },
+
+    {
+        "canonical": "instellen",
+        "category": "action",
+        "terms": [
+            # NL
+            "instellen", "setup", "configureren", "aanpassen",
+            "opzetten", "regelen",
+            # FR
+            "configurer", "paramétrer", "régler", "ajuster",
+            # EN
+            "setup", "set up", "configure", "adjust", "tune",
+        ],
+    },
+
+    {
+        "canonical": "werkt niet",
+        "category": "problem",
+        "terms": [
+            # NL
+            "werkt niet", "doet het niet", "niet actief", "kapot",
+            "defect", "stuk",
+            # FR
+            "ne fonctionne pas", "ne marche pas", "en panne",
+            "défectueux", "cassé",
+            # EN
+            "not working", "doesn't work", "broken", "defective",
+            "not functioning", "malfunction",
         ],
     },
 ]

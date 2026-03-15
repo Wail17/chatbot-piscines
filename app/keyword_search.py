@@ -46,14 +46,20 @@ logger = logging.getLogger(__name__)
 MIN_SCORE_THRESHOLD = 0.05
 
 # Weight for question match vs answer match
-QUESTION_WEIGHT = 2.0
+QUESTION_WEIGHT = 3.0  # Increased from 2.0 - questions are more important
 ANSWER_WEIGHT = 1.0
 
 # Bonus for exact phrase match
-EXACT_PHRASE_BONUS = 1.5
+EXACT_PHRASE_BONUS = 2.0  # Increased from 1.5 - exact phrases should dominate
+
+# Bonus for multi-word canonical match
+CANONICAL_PHRASE_BONUS = 2.5  # When normalized phrases match closely
 
 # Bonus when domains match
-DOMAIN_MATCH_BONUS = 0.3
+DOMAIN_MATCH_BONUS = 0.5  # Increased from 0.3
+
+# Bonus for high term coverage (80%+ query terms matched)
+HIGH_COVERAGE_BONUS = 1.5
 
 # Stop words to ignore (NL + FR + EN)
 STOP_WORDS = {
@@ -202,7 +208,9 @@ class FAQKeywordIndex:
         Scoring factors:
         1. TF-IDF weighted token overlap (question weighted higher)
         2. Exact phrase match bonus
-        3. Domain match bonus
+        3. Canonical phrase similarity bonus
+        4. High coverage bonus (80%+ terms matched)
+        5. Domain match bonus
         """
         score = 0.0
 
@@ -226,6 +234,12 @@ class FAQKeywordIndex:
         if score == 0.0:
             return 0.0
 
+        # ── Coverage bonus ────────────────────────────────────────────────────
+        # If query is short and most terms match, boost heavily
+        coverage = len(q_overlap) / max(len(query_tokens), 1)
+        if coverage >= 0.8:
+            score *= HIGH_COVERAGE_BONUS
+
         # Normalize by query length
         score = score / (len(query_tokens) + 1)
 
@@ -240,6 +254,19 @@ class FAQKeywordIndex:
                 score *= EXACT_PHRASE_BONUS
             elif query_norm in doc_a_norm:
                 score *= (EXACT_PHRASE_BONUS * 0.7)
+
+        # ── Canonical phrase similarity ───────────────────────────────────────
+        # NEW: Check if query and doc question have high word-level similarity
+        # after synonym normalization (catches "pH te laag" == "acidité trop basse")
+        if query_norm and len(query_norm) > 5 and len(doc_q_norm) > 5:
+            # Simple overlap check: if 60%+ of words in both match
+            q_words = set(query_norm.split())
+            doc_q_words = set(doc_q_norm.split())
+
+            if q_words and doc_q_words:
+                overlap_ratio = len(q_words & doc_q_words) / min(len(q_words), len(doc_q_words))
+                if overlap_ratio >= 0.6:
+                    score *= CANONICAL_PHRASE_BONUS
 
         # ── Domain match bonus ────────────────────────────────────────────────
 
