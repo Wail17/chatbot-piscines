@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pool Chatbot - WiFi Pool Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .chat-container {
+            padding: 30px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        #questionInput {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        #questionInput:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        #sendBtn {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #sendBtn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #sendBtn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .response-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .response-container.show {
+            display: block;
+            animation: fadeIn 0.5s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .answer-box {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .answer-box h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .answer-box p {
+            line-height: 1.6;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        .citations {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #ffc107;
+        }
+
+        .citations h4 {
+            color: #856404;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .citation-item {
+            margin: 5px 0;
+            color: #856404;
+            font-size: 14px;
+        }
+
+        .suggestions {
+            background: #d4edda;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #28a745;
+        }
+
+        .suggestions h4 {
+            color: #155724;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .suggestion-btn {
+            display: inline-block;
+            background: white;
+            color: #155724;
+            padding: 8px 15px;
+            margin: 5px 5px 5px 0;
+            border-radius: 20px;
+            border: 1px solid #28a745;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        .suggestion-btn:hover {
+            background: #28a745;
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 10px;
+            border-left: 4px solid #dc3545;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+            animation: fadeIn 0.5s;
+        }
+
+        .examples {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e7f3ff;
+            border-radius: 10px;
+        }
+
+        .examples h4 {
+            color: #004085;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .example-tag {
+            display: inline-block;
+            background: white;
+            color: #004085;
+            padding: 8px 15px;
+            margin: 5px 5px 5px 0;
+            border-radius: 20px;
+            border: 1px solid #004085;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        .example-tag:hover {
+            background: #004085;
+            color: white;
+        }
+
+        @media (max-width: 600px) {
+            .input-group {
+                flex-direction: column;
+            }
+
+            #sendBtn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏊‍♂️ WiFi Pool Chatbot</h1>
+            <p>Assistant intelligent pour l'entretien de votre piscine</p>
+        </div>
+
+        <div class="chat-container">
+            <div class="input-group">
+                <input
+                    type="text"
+                    id="questionInput"
+                    placeholder="Posez votre question sur l'entretien de votre piscine..."
+                    autocomplete="off"
+                >
+                <button id="sendBtn">Envoyer</button>
+            </div>
+
+            <div class="examples">
+                <h4>💡 Questions exemples :</h4>
+                <span class="example-tag" data-question="Comment entretenir ma piscine?">Comment entretenir ma piscine?</span>
+                <span class="example-tag" data-question="Qu'est-ce qu'un skimmer?">Qu'est-ce qu'un skimmer?</span>
+                <span class="example-tag" data-question="Problème de pompe">Problème de pompe</span>
+                <span class="example-tag" data-question="Comment régler le pH?">Comment régler le pH?</span>
+                <span class="example-tag" data-question="Ma piscine a une fuite">Ma piscine a une fuite</span>
+            </div>
+
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Recherche de la réponse...</p>
+            </div>
+
+            <div class="error" id="errorBox"></div>
+
+            <div class="response-container" id="responseContainer">
+                <div class="answer-box">
+                    <h3>📝 Réponse</h3>
+                    <p id="answerText"></p>
+                </div>
+
+                <div class="citations" id="citationsBox" style="display: none;">
+                    <h4>📚 Sources</h4>
+                    <div id="citationsList"></div>
+                </div>
+
+                <div class="suggestions" id="suggestionsBox" style="display: none;">
+                    <h4>💬 Questions suggérées</h4>
+                    <div id="suggestionsList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'https://web-production-5dde.up.railway.app/chat';
+
+        const questionInput = document.getElementById('questionInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const loading = document.querySelector('.loading');
+        const responseContainer = document.getElementById('responseContainer');
+        const errorBox = document.getElementById('errorBox');
+        const answerText = document.getElementById('answerText');
+        const citationsBox = document.getElementById('citationsBox');
+        const citationsList = document.getElementById('citationsList');
+        const suggestionsBox = document.getElementById('suggestionsBox');
+        const suggestionsList = document.getElementById('suggestionsList');
+
+        async function askQuestion(question) {
+            if (!question.trim()) return;
+
+            // Reset UI
+            loading.classList.add('show');
+            responseContainer.classList.remove('show');
+            errorBox.classList.remove('show');
+            sendBtn.disabled = true;
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query: question })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Display answer
+                answerText.textContent = data.answer || 'Aucune réponse disponible.';
+
+                // Display citations
+                if (data.citations && data.citations.length > 0) {
+                    citationsList.innerHTML = data.citations.map(citation =>
+                        `<div class="citation-item">📄 ${citation.title}</div>`
+                    ).join('');
+                    citationsBox.style.display = 'block';
+                } else {
+                    citationsBox.style.display = 'none';
+                }
+
+                // Display suggestions
+                if (data.suggestions && data.suggestions.length > 0) {
+                    suggestionsList.innerHTML = data.suggestions.map(suggestion =>
+                        `<span class="suggestion-btn" data-question="${suggestion}">${suggestion}</span>`
+                    ).join('');
+                    suggestionsBox.style.display = 'block';
+
+                    // Add click handlers to suggestions
+                    document.querySelectorAll('.suggestion-btn').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            questionInput.value = btn.dataset.question;
+                            askQuestion(btn.dataset.question);
+                        });
+                    });
+                } else {
+                    suggestionsBox.style.display = 'none';
+                }
+
+                responseContainer.classList.add('show');
+            } catch (error) {
+                errorBox.textContent = `❌ Erreur: ${error.message}. Vérifiez que l'API est accessible.`;
+                errorBox.classList.add('show');
+            } finally {
+                loading.classList.remove('show');
+                sendBtn.disabled = false;
+            }
+        }
+
+        // Send button click
+        sendBtn.addEventListener('click', () => {
+            askQuestion(questionInput.value);
+        });
+
+        // Enter key press
+        questionInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                askQuestion(questionInput.value);
+            }
+        });
+
+        // Example tags click
+        document.querySelectorAll('.example-tag').forEach(tag => {
+            tag.addEventListener('click', () => {
+                questionInput.value = tag.dataset.question;
+                askQuestion(tag.dataset.question);
+            });
+        });
+    </script>
+</body>
+</html>
