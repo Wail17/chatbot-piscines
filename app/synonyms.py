@@ -200,6 +200,24 @@ SYNONYM_GROUPS: List[Dict] = [
         ],
     },
 
+    {
+        "canonical": "niveau",
+        "category": "measurement",
+        "terms": [
+            # NL
+            "niveau", "waterniveau", "peil", "waterpeil", "stand",
+            "waterstand", "niveaumeting", "niveauregeling",
+            "vlotter", "vlotterschakelaar", "niveauschakelaar",
+            "niveauregelaar", "niveauswitch",
+            # FR
+            "niveau", "niveau d'eau", "niveau de l'eau",
+            "flotteur", "interrupteur à flotteur",
+            # EN
+            "level", "water level", "level sensor",
+            "float", "float switch", "level switch",
+        ],
+    },
+
     # ── DEVICE & EQUIPMENT ────────────────────────────────────────────────────
 
     {

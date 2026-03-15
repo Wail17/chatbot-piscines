@@ -71,6 +71,13 @@ except ImportError:
     _DIRECT_ANSWER_AVAILABLE = False
     get_direct_answer_with_suggestions = None
 
+try:
+    from .synonyms import SYNONYM_GROUPS as _IMPORTED_SYNONYM_GROUPS
+    _SYNONYMS_MODULE_AVAILABLE = True
+except ImportError:
+    _SYNONYMS_MODULE_AVAILABLE = False
+    _IMPORTED_SYNONYM_GROUPS = []
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Chatbot Piscines API")
