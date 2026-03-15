@@ -32,3 +32,4 @@ app/**/*.docx
 
 # --- OS / divers
 *.tmp
+app/store/
