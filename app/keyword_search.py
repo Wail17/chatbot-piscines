@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 MIN_SCORE_THRESHOLD = 0.05
 
 # Weight for question match vs answer match
-QUESTION_WEIGHT = 3.0  # Increased from 2.0 - questions are more important
-ANSWER_WEIGHT = 1.0
+QUESTION_WEIGHT = 10.0  # MAXIMUM priority - question titles are THE primary indicator
+ANSWER_WEIGHT = 0.3  # Minimal weight - answers provide context but shouldn't drive ranking
 
 # Bonus for exact phrase match
 EXACT_PHRASE_BONUS = 2.0  # Increased from 1.5 - exact phrases should dominate
@@ -60,6 +60,35 @@ DOMAIN_MATCH_BONUS = 0.5  # Increased from 0.3
 
 # Bonus for high term coverage (80%+ query terms matched)
 HIGH_COVERAGE_BONUS = 1.5
+
+# Penalty for contradictory terms (NEW!)
+CONTRADICTION_PENALTY = 0.3  # Reduce score by 70% if contradictory terms found
+
+# Key term boost (NEW!)
+KEY_TERM_BOOST = 3.0  # Multiply score by 3x if key terms match in QUESTION
+KEY_TERMS = {
+    # WiFi specific issues
+    "wachtwoord", "password", "mot de passe",
+    "signaal", "signal", "bereik", "range", "portée",
+
+    # Actions
+    "kalibreren", "calibreren", "calibrate", "calibrer", "ijken",
+    "vervangen", "replace", "remplacer", "replacement",
+    "reinigen", "schoonmaken", "clean", "nettoyer",
+    "resetten", "reset", "herstarten", "restart", "reboot",
+    "factory", "fabrieksinstellingen",
+
+    # Problems
+    "lek", "lekkage", "leak", "fuite",
+    "meting", "measurement", "mesure",
+    "offline", "hors ligne",
+
+    # Components
+    "wachtwoord", "password",
+    "timer", "tijdschakelaar",
+    "failsafe", "beveiliging",
+    "app", "applicatie", "application",
+}
 
 # Stop words to ignore (NL + FR + EN)
 STOP_WORDS = {
@@ -78,6 +107,70 @@ STOP_WORDS = {
     "the", "a", "an", "of", "in", "is", "on", "to", "and", "that", "are",
     "this", "for", "with", "how", "my", "can", "i", "not", "do", "does",
     "it", "at", "be", "by", "from", "or", "what", "when", "why", "where",
+}
+
+# Contradictory term pairs (NEW!)
+# If query has term A, penalize docs that emphasize term B (but not A)
+CONTRADICTIONS = {
+    # Password vs Signal/Connection
+    "wachtwoord": ["signaal", "bereik", "afstand", "range"],
+    "password": ["signal", "range", "distance"],
+    "mot de passe": ["signal", "portée"],
+
+    # Calibrate vs Replace/Measure
+    "kalibreren": ["vervangen", "replacement", "nieuwe", "kopen"],
+    "calibreren": ["vervangen", "replacement", "nieuwe", "kopen"],
+    "calibrate": ["replace", "replacement", "new"],
+    "calibrer": ["remplacer", "nouveau"],
+
+    # Replace vs Calibrate/Clean
+    "vervangen": ["kalibreren", "calibreren", "calibrate", "ijken"],
+    "replace": ["calibrate", "calibration", "adjust"],
+    "remplacer": ["calibrer", "étalonner"],
+
+    # Clean vs Replace
+    "reinigen": ["vervangen", "replacement", "nieuwe"],
+    "schoonmaken": ["vervangen", "replacement", "nieuwe"],
+    "clean": ["replace", "replacement", "new"],
+    "nettoyer": ["remplacer", "nouveau"],
+
+    # Factory reset vs Restart
+    "factory": ["herstarten", "reboot", "restart"],
+    "fabrieksinstellingen": ["herstarten", "reboot"],
+
+    # Restart vs Factory reset
+    "herstarten": ["factory", "fabrieksinstellingen", "wissen"],
+    "reboot": ["factory", "fabrieksinstellingen"],
+    "restart": ["factory reset", "wissen"],
+
+    # Measurement vs Calibration
+    "meting": ["kalibreren", "calibreren", "buffer", "ijken"],
+    "measurement": ["calibrate", "calibration", "buffer"],
+    "mesure": ["calibrer", "étalonner"],
+
+    # Too high vs Too low
+    "te hoog": ["te laag", "too low", "trop bas"],
+    "too high": ["te laag", "too low", "trop bas"],
+    "trop haut": ["te laag", "too low", "trop bas"],
+
+    "te laag": ["te hoog", "too high", "trop haut"],
+    "too low": ["te hoog", "too high", "trop haut"],
+    "trop bas": ["te hoog", "too high", "trop haut"],
+
+    # Leak vs Not working
+    "lek": ["werkt niet", "start niet", "draait niet"],
+    "lekkage": ["werkt niet", "start niet"],
+    "leak": ["not working", "doesn't work"],
+
+    # Not working vs Leak
+    "werkt niet": ["lek", "lekkage", "leak"],
+    "not working": ["leak", "leaking"],
+    "ne fonctionne pas": ["fuite"],
+
+    # Sensor problem vs Level problem
+    "sensor defect": ["niveau laag", "peil laag", "level low"],
+    "sensor kapot": ["niveau laag", "peil laag"],
+    "sensor broken": ["level low", "water low"],
 }
 
 
@@ -187,11 +280,30 @@ class FAQKeywordIndex:
         # Sort by score descending
         scores.sort(key=lambda x: x[1], reverse=True)
 
+        # ── Re-rank by question-specific term coverage ───────────────────────
+        # NEW: Apply final boost based on how many query terms appear in FAQ QUESTION
+        reranked = []
+        for i, score in scores[:top_k * 2]:  # Get 2x to have candidates
+            entry = self._entries[i]
+            question = entry.get("question", "").lower()
+
+            # Count how many query tokens appear in the FAQ question
+            question_tokens = set(re.findall(r'\b[a-z0-9]{2,}\b', question))
+            question_coverage = len(query_tokens & question_tokens) / max(len(query_tokens), 1)
+
+            # Apply heavy boost if query terms are in FAQ question
+            final_score = score * (1.0 + question_coverage * 2.0)
+
+            reranked.append((i, final_score))
+
+        # Re-sort by final score
+        reranked.sort(key=lambda x: x[1], reverse=True)
+
         # Return top-k with entry data
         results = []
-        for i, score in scores[:top_k]:
+        for i, final_score in reranked[:top_k]:
             entry = self._entries[i].copy()
-            results.append((entry, score))
+            results.append((entry, final_score))
 
         return results
 
@@ -211,6 +323,7 @@ class FAQKeywordIndex:
         3. Canonical phrase similarity bonus
         4. High coverage bonus (80%+ terms matched)
         5. Domain match bonus
+        6. Contradiction penalty (NEW!) - penalize docs with contradictory terms
         """
         score = 0.0
 
@@ -268,6 +381,13 @@ class FAQKeywordIndex:
                 if overlap_ratio >= 0.6:
                     score *= CANONICAL_PHRASE_BONUS
 
+        # ── Contradiction penalty ─────────────────────────────────────────────
+        # NEW: Penalize docs that contain contradictory terms
+        # Example: if query has "wachtwoord", penalize docs that emphasize "signaal"
+        has_contradiction = self._detect_contradiction(query_norm, doc_q_norm + " " + doc_a_norm)
+        if has_contradiction:
+            score *= CONTRADICTION_PENALTY
+
         # ── Domain match bonus ────────────────────────────────────────────────
 
         if query_domains and doc["domains"]:
@@ -276,6 +396,55 @@ class FAQKeywordIndex:
                 score += DOMAIN_MATCH_BONUS * len(common_domains)
 
         return score
+
+    def _detect_contradiction(self, query: str, doc_text: str) -> bool:
+        """
+        Detect if the doc contains contradictory terms relative to the query.
+
+        Returns True if:
+        - Query contains term A
+        - Doc contains contradictory term B (but NOT term A)
+        - This suggests the doc is about B, not A
+
+        Example:
+        - Query: "wifi wachtwoord fout"
+        - Doc: talks about "signaal" and "bereik" but NOT "wachtwoord"
+        - → Contradiction! Doc is about signal, not password
+        """
+        if not query or not doc_text:
+            return False
+
+        query_lower = query.lower()
+        doc_lower = doc_text.lower()
+
+        # Check each contradiction pair
+        for query_term, contradictory_terms in CONTRADICTIONS.items():
+            # Does query contain this term?
+            if query_term.lower() not in query_lower:
+                continue
+
+            # Does doc contain contradictory terms WITHOUT the original term?
+            # Count how many contradictory terms appear
+            contradiction_count = sum(
+                1 for contra in contradictory_terms
+                if contra.lower() in doc_lower
+            )
+
+            # If doc has 2+ contradictory terms and doesn't emphasize query term
+            # then it's likely about something else
+            if contradiction_count >= 2:
+                # Check if query term appears in doc question (primary focus)
+                # Extract just the question part if available
+                if " antwoord:" in doc_lower or " answer:" in doc_lower:
+                    doc_question_part = doc_lower.split("antwoord:")[0].split("answer:")[0]
+                else:
+                    doc_question_part = doc_lower[:200]  # first 200 chars
+
+                # If query term not in doc question, but contradictory terms are
+                if query_term.lower() not in doc_question_part:
+                    return True
+
+        return False
 
     def _tokenize(self, text: str) -> set:
         """
