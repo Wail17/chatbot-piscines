@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pool Chatbot - Wifipool 🏊‍♂️</title>
+    <title>Wifipool Assistant</title>
     <style>
         * {
             margin: 0;
@@ -11,552 +11,633 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --blue: #0066CC;
+            --blue-light: #1a7fd4;
+            --blue-dark: #00489a;
+            --cyan: #00AAFF;
+            --bg: #f0f4f8;
+            --white: #ffffff;
+            --gray-light: #f1f3f5;
+            --gray: #6b7280;
+            --gray-dark: #374151;
+            --bubble-bot: #ffffff;
+            --bubble-user: #0066CC;
+            --shadow: 0 4px 20px rgba(0,0,0,0.12);
+            --radius: 18px;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(160deg, #0052a3 0%, #0099e6 50%, #00c4ff 100%);
+            height: 100vh;
             display: flex;
-            justify-content: center;
             align-items: center;
-            padding: 20px;
+            justify-content: center;
+            padding: 12px;
         }
 
-        .container {
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 700px;
+        /* ── Chatbot Window ─────────────────────────────────── */
+        .chat-window {
             width: 100%;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-
-        h1 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 32px;
-            text-align: center;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
-        }
-
-        .input-group {
+            max-width: 480px;
+            height: min(700px, 96vh);
+            background: var(--bg);
+            border-radius: 24px;
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.15);
         }
 
-        #questionInput {
-            flex: 1;
-            padding: 15px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 16px;
-            transition: border-color 0.3s;
+        /* ── Header ─────────────────────────────────────────── */
+        .chat-header {
+            background: linear-gradient(135deg, var(--blue) 0%, var(--blue-light) 100%);
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
         }
 
-        #questionInput:focus {
-            outline: none;
-            border-color: #667eea;
+        .bot-avatar-header {
+            width: 44px;
+            height: 44px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+            border: 2px solid rgba(255,255,255,0.3);
         }
 
-        #questionInput.error {
-            border-color: #e74c3c;
+        .header-info h1 {
+            color: white;
+            font-size: 17px;
+            font-weight: 700;
+            line-height: 1.2;
         }
 
-        .char-counter {
-            text-align: right;
+        .header-info .status {
+            color: rgba(255,255,255,0.85);
             font-size: 12px;
-            color: #999;
-            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 2px;
         }
 
-        .char-counter.warning {
-            color: #f39c12;
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            background: #4ade80;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
         }
 
-        .char-counter.error {
-            color: #e74c3c;
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .header-logo {
+            margin-left: auto;
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            font-weight: 600;
+            text-align: right;
+            line-height: 1.4;
+        }
+
+        /* ── Messages Area ───────────────────────────────────── */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            scroll-behavior: smooth;
+        }
+
+        .chat-messages::-webkit-scrollbar { width: 4px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb { background: #c9d3de; border-radius: 4px; }
+
+        /* ── Message Rows ────────────────────────────────────── */
+        .message-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(12px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-row.user {
+            flex-direction: row-reverse;
+        }
+
+        .bot-avatar {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--blue), var(--cyan));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        /* ── Bubbles ─────────────────────────────────────────── */
+        .bubble {
+            max-width: 75%;
+            padding: 11px 15px;
+            border-radius: var(--radius);
+            font-size: 14.5px;
+            line-height: 1.55;
+            position: relative;
+            word-wrap: break-word;
+        }
+
+        .bubble.bot {
+            background: var(--bubble-bot);
+            color: var(--gray-dark);
+            border-bottom-left-radius: 5px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .bubble.user {
+            background: var(--bubble-user);
+            color: white;
+            border-bottom-right-radius: 5px;
+            box-shadow: 0 2px 8px rgba(0,102,204,0.3);
+        }
+
+        .bubble.bot pre,
+        .bubble.bot code {
+            white-space: pre-wrap;
+            font-family: inherit;
+        }
+
+        .bubble-time {
+            font-size: 10.5px;
+            color: var(--gray);
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+
+        .message-row.user .bubble-time {
+            text-align: right;
+        }
+
+        /* ── Typing Indicator ────────────────────────────────── */
+        .typing-bubble {
+            background: var(--bubble-bot);
+            border-radius: var(--radius);
+            border-bottom-left-radius: 5px;
+            padding: 14px 18px;
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .typing-dot {
+            width: 7px;
+            height: 7px;
+            background: #94a3b8;
+            border-radius: 50%;
+            animation: bounce 1.2s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40%            { transform: translateY(-6px); }
+        }
+
+        /* ── Quick Suggestions ───────────────────────────────── */
+        .suggestions-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 4px;
+            padding-left: 40px;
+        }
+
+        .suggestion-chip {
+            background: white;
+            color: var(--blue);
+            border: 1.5px solid var(--blue);
+            border-radius: 20px;
+            padding: 6px 13px;
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+
+        .suggestion-chip:hover {
+            background: var(--blue);
+            color: white;
+        }
+
+        /* ── Quick Questions (initial) ───────────────────────── */
+        .quick-questions {
+            padding: 0 16px 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .quick-chip {
+            background: white;
+            color: var(--blue-dark);
+            border: 1.5px solid #d1e3f5;
+            border-radius: 20px;
+            padding: 7px 14px;
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        }
+
+        .quick-chip:hover {
+            background: var(--blue);
+            color: white;
+            border-color: var(--blue);
+            box-shadow: 0 2px 8px rgba(0,102,204,0.25);
+        }
+
+        .quick-label {
+            font-size: 11.5px;
+            color: var(--gray);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 4px 16px 6px;
+        }
+
+        /* ── Input Area ──────────────────────────────────────── */
+        .chat-input-area {
+            background: white;
+            border-top: 1px solid #e5eaf0;
+            padding: 12px 16px;
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        #userInput {
+            flex: 1;
+            background: var(--gray-light);
+            border: 1.5px solid transparent;
+            border-radius: 22px;
+            padding: 10px 16px;
+            font-size: 14.5px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            max-height: 110px;
+            min-height: 42px;
+            line-height: 1.45;
+            color: var(--gray-dark);
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        #userInput:focus {
+            border-color: var(--blue);
+            background: white;
+        }
+
+        #userInput::placeholder {
+            color: #9ca3af;
         }
 
         #sendBtn {
-            padding: 15px 30px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            width: 42px;
+            height: 42px;
+            background: var(--blue);
             border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: bold;
+            border-radius: 50%;
             cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: background 0.2s, transform 0.15s;
+            box-shadow: 0 2px 8px rgba(0,102,204,0.3);
         }
 
         #sendBtn:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            background: var(--blue-light);
+            transform: scale(1.05);
         }
 
         #sendBtn:disabled {
-            opacity: 0.6;
+            background: #94a3b8;
             cursor: not-allowed;
+            box-shadow: none;
         }
 
-        .loading {
-            display: none;
-            text-align: center;
-            margin: 20px 0;
+        #sendBtn svg {
+            width: 18px;
+            height: 18px;
+            fill: white;
+            margin-left: 2px;
         }
 
-        .loading.show {
-            display: block;
-        }
-
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .response-container {
-            display: none;
-            margin-top: 20px;
-        }
-
-        .response-container.show {
-            display: block;
-            animation: fadeIn 0.5s;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .answer-box {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            border-left: 4px solid #667eea;
-        }
-
-        .answer-box h3 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 18px;
-        }
-
-        .answer-box p {
-            line-height: 1.6;
-            color: #333;
-            white-space: pre-wrap;
-        }
-
-        .cached-badge {
-            display: inline-block;
-            background: #2ecc71;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 4px;
+        /* ── Source tag ──────────────────────────────────────── */
+        .source-tag {
             font-size: 11px;
-            margin-left: 8px;
-            font-weight: normal;
+            color: var(--gray);
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding-left: 40px;
         }
 
-        .citations-box, .suggestions-box {
-            background: #fff;
-            padding: 15px;
-            border-radius: 10px;
-            margin-bottom: 15px;
-            border: 1px solid #e0e0e0;
+        /* ── Error bubble ────────────────────────────────────── */
+        .bubble.error {
+            background: #fee2e2;
+            color: #b91c1c;
+            border: 1px solid #fca5a5;
         }
 
-        .citations-box h4, .suggestions-box h4 {
-            color: #667eea;
-            margin-bottom: 10px;
-            font-size: 16px;
-        }
-
-        .citation-item {
-            padding: 8px;
-            background: #f8f9fa;
-            margin-bottom: 8px;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-
-        .suggestion-btn {
-            display: inline-block;
-            padding: 8px 15px;
-            background: #667eea;
-            color: white;
-            border-radius: 20px;
-            margin: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: transform 0.2s, background 0.2s;
-        }
-
-        .suggestion-btn:hover {
-            transform: scale(1.05);
-            background: #764ba2;
-        }
-
-        .error-box {
-            display: none;
-            background: #fee;
-            color: #c33;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            border-left: 4px solid #c33;
-        }
-
-        .error-box.show {
-            display: block;
-            animation: fadeIn 0.5s;
-        }
-
-        .examples {
-            margin-top: 20px;
-        }
-
-        .examples h3 {
-            color: #667eea;
-            font-size: 16px;
-            margin-bottom: 10px;
-        }
-
-        .example-tag {
-            display: inline-block;
-            padding: 8px 15px;
-            background: #f0f0f0;
-            border-radius: 20px;
-            margin: 5px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: background 0.2s;
-        }
-
-        .example-tag:hover {
-            background: #e0e0e0;
-        }
-
-        .performance-stats {
-            text-align: center;
-            font-size: 12px;
-            color: #999;
-            margin-top: 10px;
-        }
-
-        .performance-stats.fast {
-            color: #2ecc71;
-        }
-
-        .performance-stats.slow {
-            color: #e74c3c;
-        }
-
-        @media (max-width: 600px) {
-            .container {
-                padding: 20px;
-            }
-
-            h1 {
-                font-size: 24px;
-            }
-
-            .input-group {
-                flex-direction: column;
-            }
+        /* ── Responsive ──────────────────────────────────────── */
+        @media (min-width: 520px) {
+            .chat-window { height: min(720px, 94vh); }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🏊‍♂️ Pool Chatbot</h1>
-        <p class="subtitle">Posez vos questions sur l'entretien de votre piscine WiFiPool</p>
 
-        <div class="input-group">
-            <input
-                type="text"
-                id="questionInput"
-                placeholder="Posez votre question sur l'entretien de votre piscine..."
-                maxlength="500"
-            />
-            <button id="sendBtn">Envoyer</button>
-        </div>
-        <div class="char-counter" id="charCounter">0 / 500 caractères</div>
+<div class="chat-window">
 
-        <div class="loading">
-            <div class="spinner"></div>
-            <p style="margin-top: 10px; color: #667eea;">Recherche en cours...</p>
-        </div>
-
-        <div id="responseContainer" class="response-container">
-            <div class="answer-box">
-                <h3>💡 Réponse <span id="cachedBadge"></span></h3>
-                <p id="answerText"></p>
+    <!-- Header -->
+    <div class="chat-header">
+        <div class="bot-avatar-header">🏊</div>
+        <div class="header-info">
+            <h1>Assistant Wifipool</h1>
+            <div class="status">
+                <span class="status-dot"></span>
+                En ligne · prêt à vous aider
             </div>
-
-            <div id="citationsBox" class="citations-box" style="display: none;">
-                <h4>📚 Sources</h4>
-                <div id="citationsList"></div>
-            </div>
-
-            <div id="suggestionsBox" class="suggestions-box" style="display: none;">
-                <h4>💭 Questions suggérées</h4>
-                <div id="suggestionsList"></div>
-            </div>
-
-            <div class="performance-stats" id="perfStats"></div>
         </div>
+        <div class="header-logo">WiFiPool<br>Support</div>
+    </div>
 
-        <div id="errorBox" class="error-box"></div>
-
-        <div class="examples">
-            <h3>✨ Exemples de questions :</h3>
+    <!-- Messages -->
+    <div class="chat-messages" id="chatMessages">
+        <!-- Welcome message -->
+        <div class="message-row bot">
+            <div class="bot-avatar">🏊</div>
             <div>
-                <span class="example-tag" data-question="Comment entretenir ma piscine?">Comment entretenir ma piscine?</span>
-                <span class="example-tag" data-question="Qu'est-ce qu'un skimmer?">Qu'est-ce qu'un skimmer?</span>
-                <span class="example-tag" data-question="Problème de pompe">Problème de pompe</span>
-                <span class="example-tag" data-question="Comment régler le pH?">Comment régler le pH?</span>
-                <span class="example-tag" data-question="Ma piscine a une fuite">Ma piscine a une fuite</span>
+                <div class="bubble bot">
+                    Bonjour ! Je suis l'assistant Wifipool. Je peux répondre à toutes vos questions sur l'entretien et l'utilisation de votre piscine connectée. 💧<br><br>
+                    Comment puis-je vous aider ?
+                </div>
+                <div class="bubble-time" id="welcomeTime"></div>
             </div>
         </div>
     </div>
 
-    <script>
-        // Configuration
-        const API_URL = 'https://chatbot-piscines.onrender.com/chat';
-        const REQUEST_TIMEOUT = 10000; // 10 secondes
-        const MAX_RETRIES = 3;
-        const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-        const MAX_INPUT_LENGTH = 500;
+    <!-- Quick questions -->
+    <div class="quick-label">Questions fréquentes</div>
+    <div class="quick-questions" id="quickQuestions">
+        <span class="quick-chip" data-q="Comment régler le pH de ma piscine ?">💧 Régler le pH</span>
+        <span class="quick-chip" data-q="Problème de pompe, que faire ?">⚙️ Problème pompe</span>
+        <span class="quick-chip" data-q="Comment entretenir ma piscine ?">🧹 Entretien piscine</span>
+        <span class="quick-chip" data-q="Qu'est-ce que le RX redox ?">📊 RX / Redox</span>
+        <span class="quick-chip" data-q="Comment installer le WiFiPool ?">📱 Installation</span>
+        <span class="quick-chip" data-q="Ma piscine a une fuite, que faire ?">🔧 Fuite détectée</span>
+    </div>
 
-        // Cache simple en mémoire
-        const responseCache = new Map();
+    <!-- Input -->
+    <div class="chat-input-area">
+        <textarea
+            id="userInput"
+            placeholder="Posez votre question…"
+            rows="1"
+            maxlength="500"
+        ></textarea>
+        <button id="sendBtn" title="Envoyer">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+        </button>
+    </div>
 
-        // Elements DOM
-        const questionInput = document.getElementById('questionInput');
-        const sendBtn = document.getElementById('sendBtn');
-        const loading = document.querySelector('.loading');
-        const responseContainer = document.getElementById('responseContainer');
-        const errorBox = document.getElementById('errorBox');
-        const answerText = document.getElementById('answerText');
-        const cachedBadge = document.getElementById('cachedBadge');
-        const citationsBox = document.getElementById('citationsBox');
-        const citationsList = document.getElementById('citationsList');
-        const suggestionsBox = document.getElementById('suggestionsBox');
-        const suggestionsList = document.getElementById('suggestionsList');
-        const charCounter = document.getElementById('charCounter');
-        const perfStats = document.getElementById('perfStats');
+</div>
 
-        // Validation input
-        questionInput.addEventListener('input', () => {
-            const length = questionInput.value.length;
-            charCounter.textContent = `${length} / ${MAX_INPUT_LENGTH} caractères`;
+<script>
+    const API_URL = 'https://chatbot-piscines.onrender.com/chat';
 
-            if (length > MAX_INPUT_LENGTH * 0.9) {
-                charCounter.classList.add('warning');
-                charCounter.classList.remove('error');
-            } else {
-                charCounter.classList.remove('warning', 'error');
-            }
+    const chatMessages = document.getElementById('chatMessages');
+    const userInput = document.getElementById('userInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const quickQuestions = document.getElementById('quickQuestions');
 
-            if (length >= MAX_INPUT_LENGTH) {
-                charCounter.classList.add('error');
-                questionInput.classList.add('error');
-            } else {
-                questionInput.classList.remove('error');
-            }
+    // Welcome time
+    document.getElementById('welcomeTime').textContent = now();
+
+    function now() {
+        return new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Auto-resize textarea
+    userInput.addEventListener('input', () => {
+        userInput.style.height = 'auto';
+        userInput.style.height = Math.min(userInput.scrollHeight, 110) + 'px';
+    });
+
+    // Quick questions
+    quickQuestions.addEventListener('click', e => {
+        const chip = e.target.closest('.quick-chip');
+        if (chip) send(chip.dataset.q);
+    });
+
+    // Send button
+    sendBtn.addEventListener('click', () => {
+        const q = userInput.value.trim();
+        if (q) send(q);
+    });
+
+    // Enter to send (Shift+Enter = newline)
+    userInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const q = userInput.value.trim();
+            if (q) send(q);
+        }
+    });
+
+    function scrollBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function addMessage(text, type, time) {
+        const row = document.createElement('div');
+        row.className = `message-row ${type === 'user' ? 'user' : 'bot'}`;
+
+        const t = time || now();
+
+        if (type === 'user') {
+            row.innerHTML = `
+                <div>
+                    <div class="bubble user">${escHtml(text)}</div>
+                    <div class="bubble-time">${t}</div>
+                </div>`;
+        } else {
+            row.innerHTML = `
+                <div class="bot-avatar">🏊</div>
+                <div>
+                    <div class="bubble ${type}">${type === 'error' ? escHtml(text) : formatAnswer(text)}</div>
+                    <div class="bubble-time">${t}</div>
+                </div>`;
+        }
+
+        chatMessages.appendChild(row);
+        scrollBottom();
+        return row;
+    }
+
+    function addTyping() {
+        const row = document.createElement('div');
+        row.className = 'message-row bot';
+        row.id = 'typingRow';
+        row.innerHTML = `
+            <div class="bot-avatar">🏊</div>
+            <div class="typing-bubble">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>`;
+        chatMessages.appendChild(row);
+        scrollBottom();
+    }
+
+    function removeTyping() {
+        const el = document.getElementById('typingRow');
+        if (el) el.remove();
+    }
+
+    function addSuggestions(suggestions) {
+        if (!suggestions || !suggestions.length) return;
+        const row = document.createElement('div');
+        row.className = 'suggestions-row';
+        row.innerHTML = suggestions.map(s =>
+            `<span class="suggestion-chip" data-q="${escAttr(s)}">${escHtml(s)}</span>`
+        ).join('');
+        row.addEventListener('click', e => {
+            const chip = e.target.closest('.suggestion-chip');
+            if (chip) send(chip.dataset.q);
         });
+        chatMessages.appendChild(row);
+        scrollBottom();
+    }
 
-        // Fonction de timeout pour fetch
-        function fetchWithTimeout(url, options, timeout = REQUEST_TIMEOUT) {
-            return Promise.race([
-                fetch(url, options),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Timeout: La requête a pris trop de temps')), timeout)
-                )
-            ]);
-        }
+    function addSource(source) {
+        if (!source) return;
+        const el = document.createElement('div');
+        el.className = 'source-tag';
+        el.innerHTML = `📄 ${escHtml(source)}`;
+        chatMessages.appendChild(el);
+    }
 
-        // Fonction de retry avec backoff exponentiel
-        async function fetchWithRetry(url, options, retries = MAX_RETRIES) {
-            for (let i = 0; i < retries; i++) {
-                try {
-                    return await fetchWithTimeout(url, options);
-                } catch (error) {
-                    if (i === retries - 1) throw error;
+    function formatAnswer(text) {
+        // Convert newlines to <br>, basic markdown *bold*
+        return escHtml(text)
+            .replace(/\n/g, '<br>')
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>');
+    }
 
-                    // Backoff exponentiel: 1s, 2s, 4s
-                    const delay = Math.pow(2, i) * 1000;
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-            }
-        }
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
 
-        // Fonction de cache
-        function getCachedResponse(question) {
-            const key = question.toLowerCase().trim();
-            const cached = responseCache.get(key);
+    function escAttr(str) {
+        return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
 
-            if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-                return cached.data;
-            }
+    async function send(question) {
+        question = question.trim();
+        if (!question) return;
 
-            responseCache.delete(key);
-            return null;
-        }
+        // Hide quick questions after first use
+        quickQuestions.style.display = 'none';
+        document.querySelector('.quick-label').style.display = 'none';
 
-        function setCachedResponse(question, data) {
-            const key = question.toLowerCase().trim();
-            responseCache.set(key, {
-                data,
-                timestamp: Date.now()
+        // Reset input
+        userInput.value = '';
+        userInput.style.height = 'auto';
+        sendBtn.disabled = true;
+
+        // Show user bubble
+        addMessage(question, 'user');
+
+        // Show typing
+        addTyping();
+
+        try {
+            const res = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: question }),
+                signal: AbortSignal.timeout(30000)
             });
+
+            removeTyping();
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `Erreur ${res.status}`);
+            }
+
+            const data = await res.json();
+            const answer = data.answer || data.response || 'Désolé, je n\'ai pas de réponse à cette question.';
+
+            addMessage(answer, 'bot');
+
+            // Source / citations
+            if (data.citations && data.citations.length > 0) {
+                addSource(data.citations[0].title || data.citations[0]);
+            }
+
+            // Follow-up suggestions
+            if (data.suggestions && data.suggestions.length > 0) {
+                addSuggestions(data.suggestions.slice(0, 3));
+            }
+
+        } catch (err) {
+            removeTyping();
+            let msg = err.name === 'TimeoutError'
+                ? 'La réponse a pris trop de temps. Veuillez réessayer.'
+                : `Impossible de joindre le serveur. Vérifiez votre connexion.`;
+            addMessage(msg, 'error');
+        } finally {
+            sendBtn.disabled = false;
+            userInput.focus();
         }
+    }
+</script>
 
-        async function askQuestion(question) {
-            if (!question.trim()) return;
-
-            // Validation
-            if (question.length > MAX_INPUT_LENGTH) {
-                errorBox.textContent = `❌ Erreur: La question est trop longue (max ${MAX_INPUT_LENGTH} caractères)`;
-                errorBox.classList.add('show');
-                return;
-            }
-
-            // Reset UI
-            loading.classList.add('show');
-            responseContainer.classList.remove('show');
-            errorBox.classList.remove('show');
-            sendBtn.disabled = true;
-            perfStats.textContent = '';
-            cachedBadge.innerHTML = '';
-
-            const startTime = performance.now();
-            let fromCache = false;
-
-            try {
-                // Vérifier le cache
-                const cachedData = getCachedResponse(question);
-                let data;
-
-                if (cachedData) {
-                    data = cachedData;
-                    fromCache = true;
-                    // Petit délai pour simuler le chargement
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                } else {
-                    // Appel API avec retry
-                    const response = await fetchWithRetry(API_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ query: question })
-                    });
-
-                    if (!response.ok) {
-                        const errorData = await response.json().catch(() => ({}));
-                        throw new Error(`Erreur HTTP ${response.status}: ${errorData.detail || response.statusText}`);
-                    }
-
-                    data = await response.json();
-
-                    // Mettre en cache
-                    setCachedResponse(question, data);
-                }
-
-                const endTime = performance.now();
-                const duration = (endTime - startTime) / 1000;
-
-                // Afficher la réponse
-                answerText.textContent = data.answer || 'Aucune réponse disponible.';
-
-                // Badge cache
-                if (fromCache) {
-                    cachedBadge.innerHTML = '<span class="cached-badge">⚡ CACHE</span>';
-                }
-
-                // Afficher les citations
-                if (data.citations && data.citations.length > 0) {
-                    citationsList.innerHTML = data.citations.map(citation =>
-                        `<div class="citation-item">📄 ${citation.title}</div>`
-                    ).join('');
-                    citationsBox.style.display = 'block';
-                } else {
-                    citationsBox.style.display = 'none';
-                }
-
-                // Afficher les suggestions (avec event delegation)
-                if (data.suggestions && data.suggestions.length > 0) {
-                    suggestionsList.innerHTML = data.suggestions.map(suggestion =>
-                        `<span class="suggestion-btn" data-question="${suggestion}">${suggestion}</span>`
-                    ).join('');
-                    suggestionsBox.style.display = 'block';
-                } else {
-                    suggestionsBox.style.display = 'none';
-                }
-
-                // Stats de performance
-                perfStats.textContent = `⏱️ Réponse en ${duration.toFixed(2)}s ${fromCache ? '(depuis le cache)' : ''}`;
-                perfStats.className = 'performance-stats ' + (duration < 2 ? 'fast' : duration < 5 ? '' : 'slow');
-
-                responseContainer.classList.add('show');
-            } catch (error) {
-                console.error('Erreur détaillée:', error);
-                errorBox.textContent = `❌ Erreur: ${error.message}. Vérifiez votre connexion et réessayez.`;
-                errorBox.classList.add('show');
-            } finally {
-                loading.classList.remove('show');
-                sendBtn.disabled = false;
-            }
-        }
-
-        // Event delegation pour les suggestions
-        suggestionsList.addEventListener('click', (e) => {
-            if (e.target.classList.contains('suggestion-btn')) {
-                const question = e.target.dataset.question;
-                questionInput.value = question;
-                askQuestion(question);
-            }
-        });
-
-        // Bouton d'envoi
-        sendBtn.addEventListener('click', () => {
-            askQuestion(questionInput.value);
-        });
-
-        // Touche Entrée
-        questionInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                askQuestion(questionInput.value);
-            }
-        });
-
-        // Tags d'exemple
-        document.querySelectorAll('.example-tag').forEach(tag => {
-            tag.addEventListener('click', () => {
-                questionInput.value = tag.dataset.question;
-                askQuestion(tag.dataset.question);
-            });
-        });
-    </script>
 </body>
 </html>

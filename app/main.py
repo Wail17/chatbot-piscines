@@ -91,6 +91,10 @@ app.include_router(admin_router)
 ALLOWED_ORIGINS = [
     "https://beniferro.eu",
     "https://www.beniferro.eu",
+    "https://chatbot-piscines.onrender.com",
+    "http://localhost:8080",
+    "http://localhost:3000",
+    "http://127.0.0.1:8080",
 ]
 app.add_middleware(
     CORSMiddleware,
