@@ -3,6 +3,7 @@ services:
     name: chatbot-piscines
     runtime: python
     plan: free
+    branch: claude/upgrade-pool-chatbot-HjLmf
     buildCommand: echo "No build needed"
     startCommand: python3 -m http.server $PORT
     envVars:
