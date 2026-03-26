@@ -35,6 +35,30 @@ from .config import (
 )
 from .utils import normalize_text, normalize_language_code, log_error
 
+# Import JSONL FAQ manager
+try:
+    from .faq_jsonl import get_faq_manager, DEFAULT_FAQ_JSONL
+    JSONL_AVAILABLE = True
+except ImportError:
+    JSONL_AVAILABLE = False
+
+# Import synonym system (always available, no API needed)
+try:
+    from .synonyms import expand_with_synonyms, expand_with_synonyms_fuzzy, normalize_with_synonyms
+    from .keyword_search import keyword_search_as_documents, build_keyword_index
+    SYNONYMS_AVAILABLE = True
+except ImportError:
+    SYNONYMS_AVAILABLE = False
+
+    def expand_with_synonyms(text: str, **kwargs) -> str:  # type: ignore
+        return text
+
+    def expand_with_synonyms_fuzzy(text: str, **kwargs) -> str:  # type: ignore
+        return text
+
+    def normalize_with_synonyms(text: str) -> str:  # type: ignore
+        return text
+
 logger = logging.getLogger(__name__)
 
 # OpenAI client initialization with robust error handling
@@ -435,6 +459,18 @@ def _expand_queries_with_llm(question: str, n: int = 3) -> List[str]:
 def _get_vs() -> Chroma:
     """Get or create Chroma vector store instance."""
     try:
+        # Try to use JSONL FAQ manager first
+        if JSONL_AVAILABLE:
+            try:
+                manager = get_faq_manager()
+                vs = manager.get_vectorstore()
+                if vs is not None:
+                    logger.debug("Using JSONL FAQ vectorstore")
+                    return vs
+            except Exception as e:
+                logger.warning(f"JSONL vectorstore not available: {e}")
+
+        # Fallback to direct Chroma connection
         return Chroma(
             persist_directory=CHROMA_DIR,
             collection_name=COLLECTION_NAME,
@@ -505,30 +541,49 @@ def retrieve(question: str, gen_filter: Optional[str] = None) -> List[Any]:
     Retrieve relevant documents using MMR with smart fallback.
 
     Features:
+    - Synonym expansion (NL/FR/EN) so "zuurtegraad" == "pH" == "acidité"
     - Maximal Marginal Relevance for diversity
     - Query expansion for better recall
     - Neighbor expansion for context
     - GEN-based filtering
-    - Fallback to similarity search
+    - Keyword search fallback when vector store unavailable
 
     Args:
-        question: User question
+        question: User question (any language/phrasing)
         gen_filter: Optional generation filter ("gen1", "gen2", "gen3")
 
     Returns:
         List of relevant documents
     """
+    # ── Synonym expansion (with fuzzy matching for typos) ─────────────────────
+    # Enrich the query with synonyms so different phrasings match the same FAQ.
+    # Also handles typos: "kaliibrate" still matches "kalibreren"
+    # Example: "acidity" → "acidity ph zuurtegraad acidite acid level ..."
+    if SYNONYMS_AVAILABLE:
+        question_expanded = expand_with_synonyms_fuzzy(question)
+        if question_expanded != question:
+            logger.debug(f"Synonym expansion: '{question[:50]}' → '{question_expanded[:80]}'")
+    else:
+        question_expanded = question
+
+    # ── Try vector store ──────────────────────────────────────────────────────
     try:
         vs = _get_vs()
     except Exception as e:
-        logger.error(f"Vector store unavailable: {e}")
+        logger.warning(f"Vector store unavailable, falling back to keyword search: {e}")
+        # Keyword fallback: works with NO API, uses synonyms internally
+        if SYNONYMS_AVAILABLE:
+            return keyword_search_as_documents(question, top_k=TOP_K)
         return []
 
     results: List[Any] = []
     seen: Set[Any] = set()
 
-    # Expand queries for better coverage
-    queries = [question] + _expand_queries_with_llm(question, n=3)
+    # Build query list: original + synonym-expanded + LLM reformulations
+    queries = [question_expanded]
+    if question_expanded != question:
+        queries.append(question)  # also try original
+    queries += _expand_queries_with_llm(question, n=2)
 
     def mmr(q: str, k: int, fetch_k: int, flt: Optional[Dict] = None) -> List[Any]:
         """Run MMR search with fallback to similarity search."""
@@ -567,7 +622,19 @@ def retrieve(question: str, gen_filter: Optional[str] = None) -> List[Any]:
             if add_with_neighbors(docs):
                 break
 
-    # 3) Apply GEN filter if specified
+    # 3) Keyword search reinforcement using synonyms
+    # When vector results are insufficient, add keyword matches to fill gaps.
+    # This catches synonym mismatches that embeddings might miss.
+    if SYNONYMS_AVAILABLE and len(results) < max(2, TOP_K // 2):
+        try:
+            kw_docs = keyword_search_as_documents(question, top_k=TOP_K)
+            _uniq_add(results, seen, kw_docs)
+            if kw_docs:
+                logger.debug(f"Keyword search added {len(kw_docs)} docs as reinforcement")
+        except Exception as e:
+            logger.debug(f"Keyword search reinforcement failed: {e}")
+
+    # 4) Apply GEN filter if specified
     if gen_filter:
         want = gen_filter.strip().lower()
 
@@ -893,3 +960,374 @@ def get_top_suggestions(
     except Exception as e:
         log_error(e, "Suggestion generation failed", question_preview=question[:50])
         return []
+
+
+# ============================================================================
+# INTELLIGENT RETRIEVAL WITH REASONING VALIDATION
+# ============================================================================
+
+def retrieve_with_reasoning(
+    question: str,
+    gen_filter: Optional[str] = None,
+    use_reasoning: bool = True,
+    min_confidence: float = 0.6
+) -> Tuple[Optional[List[Any]], Optional[Any], float]:
+    """
+    Retrieve documents with intelligent reasoning-based validation.
+
+    This function combines:
+    1. Vector similarity search (RAG)
+    2. Intent classification
+    3. Domain matching
+    4. Reasoning-based validation
+    5. Confidence scoring
+
+    Args:
+        question: User's question
+        gen_filter: Optional generation filter
+        use_reasoning: Whether to use reasoning validation (requires API key)
+        min_confidence: Minimum confidence threshold
+
+    Returns:
+        Tuple of (documents, validation_result, confidence_score)
+    """
+    # Import reasoning module here to avoid circular imports
+    try:
+        from .reasoning import (
+            classify_intent,
+            validate_match,
+            calculate_overall_confidence,
+            should_answer_with_confidence
+        )
+    except ImportError as e:
+        logger.warning(f"Reasoning module not available: {e}")
+        use_reasoning = False
+
+    # Step 1: Retrieve candidate documents using embeddings
+    try:
+        docs = retrieve(question, gen_filter=gen_filter)
+    except Exception as e:
+        log_error(e, "Document retrieval failed")
+        return None, None, 0.0
+
+    if not docs:
+        logger.info("No documents retrieved")
+        return None, None, 0.0
+
+    # Step 2: Get similarity scores
+    try:
+        scored_docs = retrieve_with_scores(question)
+        if not scored_docs:
+            return docs, None, 0.3
+    except Exception as e:
+        log_error(e, "Scored retrieval failed")
+        return docs, None, 0.3
+
+    # If reasoning is disabled, return basic results
+    if not use_reasoning or not client:
+        best_score = scored_docs[0][1] if scored_docs else 1e9
+        # Convert distance to similarity
+        similarity = 1.0 / (1.0 + best_score)
+        return docs, None, similarity
+
+    # Step 3: Classify user intent
+    try:
+        user_intent = classify_intent(question)
+        logger.info(
+            f"Intent: {user_intent.primary_intent}, "
+            f"Domain: {user_intent.domain}, "
+            f"Confidence: {user_intent.confidence:.2f}"
+        )
+    except Exception as e:
+        log_error(e, "Intent classification failed")
+        return docs, None, 0.4
+
+    # Step 4: Validate best match using reasoning
+    best_doc, best_distance = scored_docs[0]
+    best_similarity = 1.0 / (1.0 + best_distance)
+
+    try:
+        # Extract FAQ question from metadata
+        faq_question = (best_doc.metadata or {}).get("title", "")
+        faq_answer = best_doc.page_content
+
+        if not faq_question or not faq_answer:
+            logger.warning("Missing FAQ question or answer in metadata")
+            return docs, None, best_similarity
+
+        # Validate the match
+        validation = validate_match(
+            user_question=question,
+            faq_question=faq_question,
+            faq_answer=faq_answer,
+            user_intent=user_intent
+        )
+
+        # Calculate overall confidence
+        overall_confidence = calculate_overall_confidence(
+            similarity_score=best_similarity,
+            validation=validation,
+            user_intent=user_intent
+        )
+
+        logger.info(
+            f"Validation: valid={validation.is_valid}, "
+            f"confidence={overall_confidence:.2f}, "
+            f"recommendation={validation.recommendation}"
+        )
+
+        # Check if we should answer
+        should_answer, reason = should_answer_with_confidence(
+            overall_confidence,
+            threshold=min_confidence
+        )
+
+        if not should_answer:
+            logger.info(f"Confidence too low ({overall_confidence:.2f}): {reason}")
+            return docs, validation, overall_confidence
+
+        if not validation.is_valid:
+            logger.warning(f"Match validation failed: {validation.reasoning}")
+            return docs, validation, overall_confidence
+
+        return docs, validation, overall_confidence
+
+    except Exception as e:
+        log_error(e, "Reasoning validation failed")
+        return docs, None, best_similarity
+
+
+def get_intelligent_suggestions(
+    question: str,
+    top_k: int = 4,
+    min_similarity: float = 0.3,
+    use_reasoning: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Get suggestions with reasoning-based validation and filtering.
+
+    Each suggestion is validated to ensure relevance before being returned.
+
+    Args:
+        question: User's question
+        top_k: Number of suggestions to return
+        min_similarity: Minimum similarity threshold
+        use_reasoning: Whether to use reasoning validation
+
+    Returns:
+        List of validated suggestion dictionaries
+    """
+    # Get basic suggestions first
+    suggestions = get_top_suggestions(question, top_k=top_k * 2, min_similarity=min_similarity)
+
+    if not suggestions or not use_reasoning:
+        return suggestions[:top_k]
+
+    # Import reasoning module
+    try:
+        from .reasoning import classify_intent, validate_match, classify_domain
+    except ImportError:
+        return suggestions[:top_k]
+
+    # Classify user intent once
+    try:
+        user_intent = classify_intent(question)
+        user_domain = user_intent.domain
+    except Exception as e:
+        log_error(e, "Intent classification for suggestions failed")
+        return suggestions[:top_k]
+
+    # Validate each suggestion
+    validated = []
+
+    for sugg in suggestions:
+        faq_q = sugg.get("question", "")
+        faq_a = sugg.get("answer", "")
+
+        if not faq_q or not faq_a:
+            continue
+
+        try:
+            # Quick domain check
+            sugg_domain = classify_domain(faq_q)
+
+            # Only validate if domains match or are related
+            if user_domain != "general" and sugg_domain != "general":
+                if user_domain != sugg_domain:
+                    # Skip if domains are completely unrelated
+                    continue
+
+            # Add domain info to suggestion
+            sugg["domain"] = sugg_domain
+            sugg["validated"] = True
+
+            validated.append(sugg)
+
+            if len(validated) >= top_k:
+                break
+
+        except Exception as e:
+            log_error(e, "Suggestion validation failed")
+            # Include anyway if validation fails
+            validated.append(sugg)
+
+    logger.info(f"Validated {len(validated)}/{len(suggestions)} suggestions")
+
+    return validated[:top_k]
+
+
+# ============================================================================
+# JSONL FAQ INITIALIZATION
+# ============================================================================
+
+def initialize_faq_jsonl(jsonl_path: str = DEFAULT_FAQ_JSONL, rebuild_embeddings: bool = False) -> Dict[str, Any]:
+    """
+    Initialize FAQ from JSONL file and build embeddings.
+
+    This is the main initialization function for the JSONL-based FAQ system.
+    Call this at startup or when FAQ is updated.
+
+    Args:
+        jsonl_path: Path to FAQ JSONL file
+        rebuild_embeddings: Force rebuild embeddings
+
+    Returns:
+        Dictionary with initialization status and stats
+    """
+    if not JSONL_AVAILABLE:
+        return {
+            "success": False,
+            "error": "JSONL FAQ module not available"
+        }
+
+    try:
+        logger.info("Initializing JSONL FAQ system...")
+
+        # Get FAQ manager
+        manager = get_faq_manager(jsonl_path)
+
+        # Load FAQ entries
+        entries = manager.load_faq()
+
+        if not entries:
+            logger.warning("No FAQ entries loaded")
+            return {
+                "success": False,
+                "error": "No FAQ entries found",
+                "entries_count": 0
+            }
+
+        logger.info(f"Loaded {len(entries)} FAQ entries")
+
+        # Build embeddings
+        if rebuild_embeddings or manager.vectorstore is None:
+            logger.info("Building embeddings...")
+            success = manager.build_embeddings(force_rebuild=rebuild_embeddings)
+
+            if not success:
+                return {
+                    "success": False,
+                    "error": "Failed to build embeddings",
+                    "entries_count": len(entries)
+                }
+
+        # Get stats
+        stats = manager.get_stats()
+
+        # Build keyword index (always built, works without API)
+        if SYNONYMS_AVAILABLE:
+            try:
+                build_keyword_index(entries)
+                logger.info(f"✅ Keyword index built with synonym support ({len(entries)} entries)")
+            except Exception as ke:
+                logger.warning(f"Keyword index build failed (non-critical): {ke}")
+
+        logger.info(f"✅ FAQ JSONL system initialized: {stats['total_entries']} entries")
+
+        return {
+            "success": True,
+            "entries_count": stats['total_entries'],
+            "keyword_index": SYNONYMS_AVAILABLE,
+            "stats": stats,
+            "message": "FAQ JSONL system ready"
+        }
+
+    except Exception as e:
+        log_error(e, "Failed to initialize FAQ JSONL")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def update_faq_entry(question: str, new_answer: str) -> Dict[str, Any]:
+    """
+    Update an FAQ entry and rebuild embeddings.
+
+    Args:
+        question: Question text to update
+        new_answer: New answer text
+
+    Returns:
+        Dictionary with update status
+    """
+    if not JSONL_AVAILABLE:
+        return {
+            "success": False,
+            "error": "JSONL FAQ module not available"
+        }
+
+    try:
+        from .faq_jsonl import update_faq_jsonl
+
+        logger.info(f"Updating FAQ entry: {question[:50]}...")
+
+        success = update_faq_jsonl(question, new_answer)
+
+        if success:
+            logger.info("✅ FAQ entry updated and embeddings rebuilt")
+            return {
+                "success": True,
+                "message": "FAQ entry updated successfully"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Failed to update FAQ entry"
+            }
+
+    except Exception as e:
+        log_error(e, "Failed to update FAQ entry", question=question[:50])
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def get_faq_stats() -> Dict[str, Any]:
+    """
+    Get FAQ statistics.
+
+    Returns:
+        Dictionary with FAQ stats
+    """
+    if not JSONL_AVAILABLE:
+        return {
+            "system": "legacy",
+            "available": False
+        }
+
+    try:
+        manager = get_faq_manager()
+        stats = manager.get_stats()
+        stats["system"] = "jsonl"
+        stats["available"] = True
+        return stats
+
+    except Exception as e:
+        log_error(e, "Failed to get FAQ stats")
+        return {
+            "system": "jsonl",
+            "available": False,
+            "error": str(e)
+        }

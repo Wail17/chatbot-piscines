@@ -4,7 +4,7 @@ import json
 import unicodedata
 from typing import List, Tuple, Any, Dict
 
-import pandas as pd
+# Note: pandas removed - Excel ingestion deprecated in favor of JSONL
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from docx import Document as DocxDocument
@@ -157,91 +157,17 @@ def ingest_folder(root: str, source_type: str = "mixed"):
     return {"indexed_files": file_count, "indexed_chunks": len(texts)}
 
 # ==============================================================
-#                  Ingestion: Excel (simple)
+#                  Ingestion: Excel (DEPRECATED - Use JSONL)
 # ==============================================================
-
-def _col_lookup(df: pd.DataFrame, *aliases) -> str:
-    low = {_norm_name(c): c for c in df.columns}
-    for a in aliases:
-        key = _norm_name(a)
-        if key in low:
-            return low[key]
-    return ""
-
-def ingest_excel(path: str, source_type: str = "faq"):
-    """
-    Lecture simple d'un Excel : colonnes minimales
-      - 'Categorie'
-      - 'Vraag' / 'Question'
-      - 'Antwoord' / 'Answer'
-    -> On génère un index JSON et on pousse le texte dans Chroma.
-    """
-    xls = pd.ExcelFile(path, engine="openpyxl")
-    # on prend la 1ère feuille qui contient Q/A
-    df, chosen_sheet = None, None
-    for sheet in xls.sheet_names:
-        df_try = xls.parse(sheet).fillna("")
-        c_q_try = _col_lookup(df_try, "Vraag", "Question")
-        c_a_try = _col_lookup(df_try, "Antwoord", "Answer")
-        if c_q_try and c_a_try:
-            df, chosen_sheet = df_try, sheet
-            break
-    if df is None:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "kolommen 'Vraag'/'Antwoord' ontbreken"}
-
-    c_q = _col_lookup(df, "Vraag", "Question")
-    c_a = _col_lookup(df, "Antwoord", "Answer")
-    c_cat = _col_lookup(df, "Categorie", "Category")
-
-    index_rows: List[dict] = []
-    texts, metas = [], []
-
-    for _, row in df.iterrows():
-        vraag = str(row.get(c_q, "")).strip()
-        antw  = str(row.get(c_a, "")).strip()
-        if not vraag or not antw:
-            continue
-        category = str(row.get(c_cat, "")).strip() if c_cat else ""
-
-        # index JSON (réponse directe)
-        index_rows.append({
-            "category": category or "",
-            "question": vraag,
-            "answer": antw,
-            "follow_up": False,
-            "followup_q": None,
-            "options": {},
-            "source": path,
-            "sheet": chosen_sheet,
-        })
-
-        # vecteur
-        texts.append(f"Vraag: {vraag}\nAntwoord: {antw}")
-        metas.append({
-            "source": path,
-            "title": (vraag[:80] + "…") if len(vraag) > 80 else vraag,
-            "source_type": source_type,
-            "categorie": category or "",
-            "sheet": chosen_sheet or "",
-        })
-
-    # write JSON index
-    if not index_rows:
-        return {"indexed_files": 0, "indexed_chunks": 0, "error": "no rows"}
-
-    _ensure_store_dir()
-    index_path = os.path.join(STORE_DIR, "faq_index.json")
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_rows, f, ensure_ascii=False, indent=2)
-
-    _index_to_vectorstore(texts, metas)
-
-    return {
-        "indexed_files": 1,
-        "indexed_chunks": len(texts),
-        "sheet_used": chosen_sheet,
-        "wrote_index": index_path,
-    }
+#
+# Excel ingestion has been removed in favor of JSONL format.
+# For FAQ management, use:
+#   - app/faq_jsonl.py for JSONL-based FAQ management
+#   - migrate_to_jsonl.py to convert existing Excel/data to JSONL
+#   - update_faq.py to add/update/delete FAQ entries
+#
+# The FAQ system now uses a single JSONL file: app/data/faq.jsonl
+# ==============================================================
 
 # ==============================================================
 #               Ingestion: JSONL (nouveau format)
@@ -370,8 +296,10 @@ def ingest_path(path: str, source_type: str = "mixed"):
     Route unique appelée par /ingest.
     - dossier -> ingest_folder
     - .jsonl / .json -> ingest_jsonl
-    - .xlsx / .xls   -> ingest_excel (simple)
+    - .xlsx / .xls   -> DEPRECATED (use JSONL format instead)
     - pdf/docx/html/txt -> envoi RAG uniquement
+
+    Note: Excel ingestion is deprecated. Use JSONL format for FAQ data.
     """
     if not path:
         return {"indexed_files": 0, "indexed_chunks": 0}
@@ -385,7 +313,12 @@ def ingest_path(path: str, source_type: str = "mixed"):
         return ingest_jsonl(path, source_type="faq")
 
     if ext in {"xlsx", "xls"}:
-        return ingest_excel(path, source_type="faq")
+        # Excel ingestion is deprecated - use JSONL format
+        return {
+            "indexed_files": 0,
+            "indexed_chunks": 0,
+            "error": "Excel ingestion is deprecated. Please convert to JSONL format using migrate_to_jsonl.py"
+        }
 
     # Fichiers texte pour RAG pur (pas d'index de FAQ)
     texts, metas = [], []

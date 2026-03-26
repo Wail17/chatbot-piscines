@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wifipool Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --blue: #0066CC;
+            --blue-light: #1a7fd4;
+            --blue-dark: #00489a;
+            --cyan: #00AAFF;
+            --bg: #f0f4f8;
+            --white: #ffffff;
+            --gray-light: #f1f3f5;
+            --gray: #6b7280;
+            --gray-dark: #374151;
+            --bubble-bot: #ffffff;
+            --bubble-user: #0066CC;
+            --shadow: 0 4px 20px rgba(0,0,0,0.12);
+            --radius: 18px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(160deg, #0052a3 0%, #0099e6 50%, #00c4ff 100%);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px;
+        }
+
+        /* ── Chatbot Window ─────────────────────────────────── */
+        .chat-window {
+            width: 100%;
+            max-width: 480px;
+            height: min(700px, 96vh);
+            background: var(--bg);
+            border-radius: 24px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.15);
+        }
+
+        /* ── Header ─────────────────────────────────────────── */
+        .chat-header {
+            background: linear-gradient(135deg, var(--blue) 0%, var(--blue-light) 100%);
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+
+        .bot-avatar-header {
+            width: 44px;
+            height: 44px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            flex-shrink: 0;
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+
+        .header-info h1 {
+            color: white;
+            font-size: 17px;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .header-info .status {
+            color: rgba(255,255,255,0.85);
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 2px;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            background: #4ade80;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .header-logo {
+            margin-left: auto;
+            color: rgba(255,255,255,0.6);
+            font-size: 12px;
+            font-weight: 600;
+            text-align: right;
+            line-height: 1.4;
+        }
+
+        /* ── Messages Area ───────────────────────────────────── */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            scroll-behavior: smooth;
+        }
+
+        .chat-messages::-webkit-scrollbar { width: 4px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb { background: #c9d3de; border-radius: 4px; }
+
+        /* ── Message Rows ────────────────────────────────────── */
+        .message-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(12px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-row.user {
+            flex-direction: row-reverse;
+        }
+
+        .bot-avatar {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--blue), var(--cyan));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        /* ── Bubbles ─────────────────────────────────────────── */
+        .bubble {
+            max-width: 75%;
+            padding: 11px 15px;
+            border-radius: var(--radius);
+            font-size: 14.5px;
+            line-height: 1.55;
+            position: relative;
+            word-wrap: break-word;
+        }
+
+        .bubble.bot {
+            background: var(--bubble-bot);
+            color: var(--gray-dark);
+            border-bottom-left-radius: 5px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .bubble.user {
+            background: var(--bubble-user);
+            color: white;
+            border-bottom-right-radius: 5px;
+            box-shadow: 0 2px 8px rgba(0,102,204,0.3);
+        }
+
+        .bubble.bot pre,
+        .bubble.bot code {
+            white-space: pre-wrap;
+            font-family: inherit;
+        }
+
+        .bubble-time {
+            font-size: 10.5px;
+            color: var(--gray);
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+
+        .message-row.user .bubble-time {
+            text-align: right;
+        }
+
+        /* ── Typing Indicator ────────────────────────────────── */
+        .typing-bubble {
+            background: var(--bubble-bot);
+            border-radius: var(--radius);
+            border-bottom-left-radius: 5px;
+            padding: 14px 18px;
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .typing-dot {
+            width: 7px;
+            height: 7px;
+            background: #94a3b8;
+            border-radius: 50%;
+            animation: bounce 1.2s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: translateY(0); }
+            40%            { transform: translateY(-6px); }
+        }
+
+        /* ── Quick Suggestions ───────────────────────────────── */
+        .suggestions-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 4px;
+            padding-left: 40px;
+        }
+
+        .suggestion-chip {
+            background: white;
+            color: var(--blue);
+            border: 1.5px solid var(--blue);
+            border-radius: 20px;
+            padding: 6px 13px;
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+        }
+
+        .suggestion-chip:hover {
+            background: var(--blue);
+            color: white;
+        }
+
+        /* ── Quick Questions (initial) ───────────────────────── */
+        .quick-questions {
+            padding: 0 16px 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .quick-chip {
+            background: white;
+            color: var(--blue-dark);
+            border: 1.5px solid #d1e3f5;
+            border-radius: 20px;
+            padding: 7px 14px;
+            font-size: 12.5px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 500;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+        }
+
+        .quick-chip:hover {
+            background: var(--blue);
+            color: white;
+            border-color: var(--blue);
+            box-shadow: 0 2px 8px rgba(0,102,204,0.25);
+        }
+
+        .quick-label {
+            font-size: 11.5px;
+            color: var(--gray);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 4px 16px 6px;
+        }
+
+        /* ── Input Area ──────────────────────────────────────── */
+        .chat-input-area {
+            background: white;
+            border-top: 1px solid #e5eaf0;
+            padding: 12px 16px;
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+
+        #userInput {
+            flex: 1;
+            background: var(--gray-light);
+            border: 1.5px solid transparent;
+            border-radius: 22px;
+            padding: 10px 16px;
+            font-size: 14.5px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            max-height: 110px;
+            min-height: 42px;
+            line-height: 1.45;
+            color: var(--gray-dark);
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        #userInput:focus {
+            border-color: var(--blue);
+            background: white;
+        }
+
+        #userInput::placeholder {
+            color: #9ca3af;
+        }
+
+        #sendBtn {
+            width: 42px;
+            height: 42px;
+            background: var(--blue);
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: background 0.2s, transform 0.15s;
+            box-shadow: 0 2px 8px rgba(0,102,204,0.3);
+        }
+
+        #sendBtn:hover:not(:disabled) {
+            background: var(--blue-light);
+            transform: scale(1.05);
+        }
+
+        #sendBtn:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        #sendBtn svg {
+            width: 18px;
+            height: 18px;
+            fill: white;
+            margin-left: 2px;
+        }
+
+        /* ── Source tag ──────────────────────────────────────── */
+        .source-tag {
+            font-size: 11px;
+            color: var(--gray);
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding-left: 40px;
+        }
+
+        /* ── Error bubble ────────────────────────────────────── */
+        .bubble.error {
+            background: #fee2e2;
+            color: #b91c1c;
+            border: 1px solid #fca5a5;
+        }
+
+        /* ── Responsive ──────────────────────────────────────── */
+        @media (min-width: 520px) {
+            .chat-window { height: min(720px, 94vh); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="chat-window">
+
+    <!-- Header -->
+    <div class="chat-header">
+        <div class="bot-avatar-header">🏊</div>
+        <div class="header-info">
+            <h1>Assistant Wifipool</h1>
+            <div class="status">
+                <span class="status-dot"></span>
+                En ligne · prêt à vous aider
+            </div>
+        </div>
+        <div class="header-logo">WiFiPool<br>Support</div>
+    </div>
+
+    <!-- Messages -->
+    <div class="chat-messages" id="chatMessages">
+        <!-- Welcome message -->
+        <div class="message-row bot">
+            <div class="bot-avatar">🏊</div>
+            <div>
+                <div class="bubble bot">
+                    Bonjour ! Je suis l'assistant Wifipool. Je peux répondre à toutes vos questions sur l'entretien et l'utilisation de votre piscine connectée. 💧<br><br>
+                    Comment puis-je vous aider ?
+                </div>
+                <div class="bubble-time" id="welcomeTime"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick questions -->
+    <div class="quick-label">Questions fréquentes</div>
+    <div class="quick-questions" id="quickQuestions">
+        <span class="quick-chip" data-q="Comment régler le pH de ma piscine ?">💧 Régler le pH</span>
+        <span class="quick-chip" data-q="Problème de pompe, que faire ?">⚙️ Problème pompe</span>
+        <span class="quick-chip" data-q="Comment entretenir ma piscine ?">🧹 Entretien piscine</span>
+        <span class="quick-chip" data-q="Qu'est-ce que le RX redox ?">📊 RX / Redox</span>
+        <span class="quick-chip" data-q="Comment installer le WiFiPool ?">📱 Installation</span>
+        <span class="quick-chip" data-q="Ma piscine a une fuite, que faire ?">🔧 Fuite détectée</span>
+    </div>
+
+    <!-- Input -->
+    <div class="chat-input-area">
+        <textarea
+            id="userInput"
+            placeholder="Posez votre question…"
+            rows="1"
+            maxlength="500"
+        ></textarea>
+        <button id="sendBtn" title="Envoyer">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+        </button>
+    </div>
+
+</div>
+
+<script>
+    const API_URL = 'https://chatbot-piscines.onrender.com/chat';
+
+    const chatMessages = document.getElementById('chatMessages');
+    const userInput = document.getElementById('userInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const quickQuestions = document.getElementById('quickQuestions');
+
+    // Welcome time
+    document.getElementById('welcomeTime').textContent = now();
+
+    function now() {
+        return new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    // Auto-resize textarea
+    userInput.addEventListener('input', () => {
+        userInput.style.height = 'auto';
+        userInput.style.height = Math.min(userInput.scrollHeight, 110) + 'px';
+    });
+
+    // Quick questions
+    quickQuestions.addEventListener('click', e => {
+        const chip = e.target.closest('.quick-chip');
+        if (chip) send(chip.dataset.q);
+    });
+
+    // Send button
+    sendBtn.addEventListener('click', () => {
+        const q = userInput.value.trim();
+        if (q) send(q);
+    });
+
+    // Enter to send (Shift+Enter = newline)
+    userInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const q = userInput.value.trim();
+            if (q) send(q);
+        }
+    });
+
+    function scrollBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function addMessage(text, type, time) {
+        const row = document.createElement('div');
+        row.className = `message-row ${type === 'user' ? 'user' : 'bot'}`;
+
+        const t = time || now();
+
+        if (type === 'user') {
+            row.innerHTML = `
+                <div>
+                    <div class="bubble user">${escHtml(text)}</div>
+                    <div class="bubble-time">${t}</div>
+                </div>`;
+        } else {
+            row.innerHTML = `
+                <div class="bot-avatar">🏊</div>
+                <div>
+                    <div class="bubble ${type}">${type === 'error' ? escHtml(text) : formatAnswer(text)}</div>
+                    <div class="bubble-time">${t}</div>
+                </div>`;
+        }
+
+        chatMessages.appendChild(row);
+        scrollBottom();
+        return row;
+    }
+
+    function addTyping() {
+        const row = document.createElement('div');
+        row.className = 'message-row bot';
+        row.id = 'typingRow';
+        row.innerHTML = `
+            <div class="bot-avatar">🏊</div>
+            <div class="typing-bubble">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>`;
+        chatMessages.appendChild(row);
+        scrollBottom();
+    }
+
+    function removeTyping() {
+        const el = document.getElementById('typingRow');
+        if (el) el.remove();
+    }
+
+    function addSuggestions(suggestions) {
+        if (!suggestions || !suggestions.length) return;
+        const row = document.createElement('div');
+        row.className = 'suggestions-row';
+        row.innerHTML = suggestions.map(s =>
+            `<span class="suggestion-chip" data-q="${escAttr(s)}">${escHtml(s)}</span>`
+        ).join('');
+        row.addEventListener('click', e => {
+            const chip = e.target.closest('.suggestion-chip');
+            if (chip) send(chip.dataset.q);
+        });
+        chatMessages.appendChild(row);
+        scrollBottom();
+    }
+
+    function addSource(source) {
+        if (!source) return;
+        const el = document.createElement('div');
+        el.className = 'source-tag';
+        el.innerHTML = `📄 ${escHtml(source)}`;
+        chatMessages.appendChild(el);
+    }
+
+    function formatAnswer(text) {
+        // Convert newlines to <br>, basic markdown *bold*
+        return escHtml(text)
+            .replace(/\n/g, '<br>')
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>');
+    }
+
+    function escHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function escAttr(str) {
+        return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    async function send(question) {
+        question = question.trim();
+        if (!question) return;
+
+        // Hide quick questions after first use
+        quickQuestions.style.display = 'none';
+        document.querySelector('.quick-label').style.display = 'none';
+
+        // Reset input
+        userInput.value = '';
+        userInput.style.height = 'auto';
+        sendBtn.disabled = true;
+
+        // Show user bubble
+        addMessage(question, 'user');
+
+        // Show typing
+        addTyping();
+
+        try {
+            const res = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: question }),
+                signal: AbortSignal.timeout(30000)
+            });
+
+            removeTyping();
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || `Erreur ${res.status}`);
+            }
+
+            const data = await res.json();
+            const answer = data.answer || data.response || 'Désolé, je n\'ai pas de réponse à cette question.';
+
+            addMessage(answer, 'bot');
+
+            // Source / citations
+            if (data.citations && data.citations.length > 0) {
+                addSource(data.citations[0].title || data.citations[0]);
+            }
+
+            // Follow-up suggestions
+            if (data.suggestions && data.suggestions.length > 0) {
+                addSuggestions(data.suggestions.slice(0, 3));
+            }
+
+        } catch (err) {
+            removeTyping();
+            let msg = err.name === 'TimeoutError'
+                ? 'La réponse a pris trop de temps. Veuillez réessayer.'
+                : `Impossible de joindre le serveur. Vérifiez votre connexion.`;
+            addMessage(msg, 'error');
+        } finally {
+            sendBtn.disabled = false;
+            userInput.focus();
+        }
+    }
+</script>
+
+</body>
+</html>

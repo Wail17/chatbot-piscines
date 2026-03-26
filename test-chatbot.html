@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Chatbot Piscine</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2563eb;
+        }
+        textarea {
+            width: 100%;
+            padding: 15px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-family: Arial, sans-serif;
+        }
+        button {
+            background: #2563eb;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        #response {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f0f9ff;
+            border-left: 4px solid #2563eb;
+            border-radius: 5px;
+            white-space: pre-wrap;
+        }
+        .citations {
+            margin-top: 15px;
+            padding: 10px;
+            background: #fef3c7;
+            border-radius: 5px;
+        }
+        .suggestions {
+            margin-top: 15px;
+        }
+        .suggestion {
+            display: inline-block;
+            padding: 5px 12px;
+            margin: 5px;
+            background: #e0e7ff;
+            border-radius: 15px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .suggestion:hover {
+            background: #c7d2fe;
+        }
+        .loading {
+            display: none;
+            color: #2563eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏊 Test Chatbot Piscine</h1>
+        <p>Pose une question sur les piscines:</p>
+
+        <textarea id="question" rows="3" placeholder="Ex: Comment nettoyer ma piscine?">Comment entretenir ma piscine?</textarea>
+
+        <button onclick="askQuestion()">Envoyer</button>
+        <span class="loading" id="loading">⏳ Réflexion...</span>
+
+        <div id="response"></div>
+    </div>
+
+    <script>
+        const API_URL = 'https://web-production-5dde.up.railway.app/chat';
+
+        async function askQuestion() {
+            const question = document.getElementById('question').value;
+            const responseDiv = document.getElementById('response');
+            const loading = document.getElementById('loading');
+
+            if (!question.trim()) {
+                alert('Pose une question!');
+                return;
+            }
+
+            // Show loading
+            loading.style.display = 'inline';
+            responseDiv.innerHTML = '';
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ query: question })
+                });
+
+                const data = await response.json();
+
+                loading.style.display = 'none';
+
+                if (response.ok) {
+                    displayResponse(data);
+                } else {
+                    responseDiv.innerHTML = `<strong>❌ Erreur:</strong> ${JSON.stringify(data, null, 2)}`;
+                }
+            } catch (error) {
+                loading.style.display = 'none';
+                responseDiv.innerHTML = `<strong>❌ Erreur réseau:</strong> ${error.message}`;
+            }
+        }
+
+        function displayResponse(data) {
+            const responseDiv = document.getElementById('response');
+
+            let html = `<strong>💬 Réponse:</strong><br>${data.answer}`;
+
+            // Citations
+            if (data.citations && data.citations.length > 0) {
+                html += '<div class="citations"><strong>📚 Sources:</strong><br>';
+                data.citations.forEach(citation => {
+                    html += `• ${citation.title}<br>`;
+                });
+                html += '</div>';
+            }
+
+            // Suggestions
+            if (data.suggestions && data.suggestions.length > 0) {
+                html += '<div class="suggestions"><strong>💡 Questions suggérées:</strong><br>';
+                data.suggestions.forEach(suggestion => {
+                    html += `<span class="suggestion" onclick="askSuggestion('${suggestion.replace(/'/g, "\\'")}')">${suggestion}</span>`;
+                });
+                html += '</div>';
+            }
+
+            responseDiv.innerHTML = html;
+        }
+
+        function askSuggestion(suggestion) {
+            document.getElementById('question').value = suggestion;
+            askQuestion();
+        }
+
+        // Allow Enter to submit (Ctrl+Enter for newline)
+        document.getElementById('question').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey) {
+                e.preventDefault();
+                askQuestion();
+            }
+        });
+    </script>
+</body>
+</html>
