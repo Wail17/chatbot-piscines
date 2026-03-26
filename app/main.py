@@ -8,6 +8,8 @@ from difflib import SequenceMatcher, get_close_matches
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
 from openai import OpenAI
@@ -2662,3 +2664,15 @@ def chat(req: ChatRequest, request: Request):
     result = _add_suggestions_to_response(response, q, lang_code, None)
     cache_set(normalize_for_cache(q), result)
     return result
+
+
+# ---------------------------------------------------------------------
+# Serve Static Frontend
+# ---------------------------------------------------------------------
+import os
+
+@app.get("/")
+async def serve_frontend():
+    """Serve the index.html file at root"""
+    index_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "index.html")
+    return FileResponse(index_path)
