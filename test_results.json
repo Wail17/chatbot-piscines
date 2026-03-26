@@ -4,9 +4,9 @@
     "question": "Comment régler le pH de ma piscine?",
     "category": "Entretien pH",
     "answer": "Je vindt je naam onder het wiel en bovenaan de pagina zwembad instellingen, en ook onder het wiel .",
-    "elapsed": 27.247238874435425,
+    "elapsed": 0.2163221836090088,
     "match_rate": 0.0,
-    "quality_score": 10.0,
+    "quality_score": 20.0,
     "suggestions": [
       "De RX waarde op mijn doseerapparaat is normaal (650-750mV) , maar toch is de chloor laag. Hoe kan dat?",
       "Hoe kan ik een toestel manueel starten of stoppen ?",
@@ -21,16 +21,16 @@
     "question": "Qu'est-ce qu'un skimmer?",
     "category": "Équipement",
     "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
-    "elapsed": 24.64803409576416,
+    "elapsed": 15.708847761154175,
     "match_rate": 0.0,
     "quality_score": 10.0,
     "suggestions": [
-      "Zodra mijn zoutelektrolyse aanslaat, stijgt de pH. Hoe kan dat?",
-      "Mijn niveaumeting staat omgekeerd (hoog = laag). Wat doe ik?",
-      "Ik heb de kalibratie-instructies gevolgd maar zie geen optie ‘Kalibreren’. Hoe kan dat?",
-      "De pH waarde van mijn apparaat komt niet over een met de kleurmeting die ik doe. Wat kan ik hieraan doen ?",
-      "Tijdens het koppelen krijg ik de foutmelding ‘serienummer onbekend’. Wat moet ik doen?",
-      "Moeten de sondes volledig in het water steken, of alleen het water aanraken?"
+      "Is er een specificatie voor de maximale lengte van de voedingskabel van de pomp voor een frequentieregelaar?",
+      "Wat is het verschil tussen Gen 1 en Gen 2?",
+      "Kan ik zelf de barcodes van de Wifipool-apparaten aanmaken?",
+      "Ik wil EPDM-zonnematten leggen voor een zwembad. Wat heb ik nodig?",
+      "Mijn HS Zoutelektrolysetoestel van mijn automatisch doseertoestel gaat niet aan, hoe komt dat ?",
+      "Hoe kan ik een toestel manueel starten of stoppen ?"
     ]
   },
   {
@@ -38,16 +38,16 @@
     "question": "Problème de pompe, que faire?",
     "category": "Dépannage",
     "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
-    "elapsed": 23.7704074382782,
+    "elapsed": 22.549072742462158,
     "match_rate": 0.0,
     "quality_score": 10.0,
     "suggestions": [
-      "Wat is een TLF-module?",
-      "Moet het water eerst pH ~7,4 hebben vóór ik het automatische doseersysteem start?",
-      "Kan ik pH op afstand controleren met de Wifipool-app (buiten het huis)?",
-      "Hoe schat ik de stroomsnelheid in met een frequentieregelaar?",
-      "Wat is E9 fout op mijn zoutelektrolyse ?",
-      "Van welk type is de Beniferro temperatuurssonde?"
+      "Benisol-kast schakelt 230 V bij sensorverwarming, maar de automatische kraan activeert niet. Waar ligt het probleem?",
+      "De RX op mijn toestel wijkt sterk af en/of varieert heel hard. Hoe kan dit ?",
+      "Tijdens het koppelen krijg ik de foutmelding ‘serienummer onbekend’. Wat moet ik doen?",
+      "Is de temperatuurssonde geschikt voor water- én buitentemperatuur?",
+      "Steek ik de niveauswitch gewoon in de bidon?",
+      "Wat is het maximaal vermogen van de wifipool ZATX0188 frequentieregelaar?"
     ]
   },
   {
@@ -55,9 +55,9 @@
     "question": "Comment entretenir ma piscine?",
     "category": "Entretien général",
     "answer": "De sondehouder kan op twee plaatsen lekken:\n1) Schroefdraad: gebruik bij voorkeur filetplast over de draad/slangklem, dichtschroeven en 24 u laten uitharden (of gebruik rubber dichtingen).\n2) Bovenaan bij de sondeaansluiting: controleer of de interne rubber correct in de bovenste zitting ligt; bij verkeerd plaatsen kan de aansluiting lekken.",
-    "elapsed": 6.640693664550781,
+    "elapsed": 0.19766449928283691,
     "match_rate": 0.0,
-    "quality_score": 10.0,
+    "quality_score": 20.0,
     "suggestions": [
       "Maakt het Wifipool-doseertoestel verbinding met mijn wifi-thuisnetwerk?",
       "Hoe kan ik op een  printplaat zien, of dit een pH of RX printplaat is?",
@@ -72,16 +72,16 @@
     "question": "Qu'est-ce que le RX redox?",
     "category": "Chimie",
     "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
-    "elapsed": 21.527715921401978,
+    "elapsed": 20.123302459716797,
     "match_rate": 0.0,
     "quality_score": 10.0,
     "suggestions": [
-      "Wat is het maximaal vermogen van de wifipool ZATX0188 frequentieregelaar?",
-      "Wat is de benodigde flow voor zonneverwarming?",
-      "Kan de TLF-module op 2 vloeistoftemperatuurmeters worden aangesloten?",
-      "Hoe kan ik op een  printplaat zien, of dit een pH of RX printplaat is?",
-      "Als de flow in mijn zwembad stopt, verandert de pH. Is dat normaal?",
-      "Mijn zoutelektrolysetoestel van mijn automatisch doseertoestel gaat niet aan. Hoe komt dat?"
+      "De RX op mijn toestel wijkt sterk af en/of varieert heel hard. Hoe kan dit ?",
+      "Ik heb een lek aan de schroefdraad zwembadverbinding; hoe kan ik die het beste lekdicht maken?",
+      "Zodra mijn zoutelektrolyse aanslaat, stijgt de pH. Hoe kan dat?",
+      "Wat is de benodigde stroomsnelheid voor waterbehandeling (algemeen)?",
+      "Mijn HS Zoutelektrolysetoestel van mijn automatisch doseertoestel gaat niet aan, hoe komt dat ?",
+      "De pH op mijn toestel wijkt sterk af en of varieert heel hard . Hoe kan dit ?"
     ]
   },
   {
@@ -89,16 +89,16 @@
     "question": "Ma piscine a une fuite, que faire?",
     "category": "Problème",
     "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
-    "elapsed": 22.232201099395752,
+    "elapsed": 21.70184016227722,
     "match_rate": 0.0,
     "quality_score": 10.0,
     "suggestions": [
-      "Wat gebeurt er als bij een wifipool apparaat de wifi (of ethernet) wegvalt?",
-      "Hoe schat ik de stroomsnelheid in met een frequentieregelaar?",
-      "Waarom moet ik een timer programmeren in mijn Wifipool-installatie als ik het systeem samen met de filterpomp uitschakel?",
+      "Benisol-kast schakelt 230 V bij sensorverwarming, maar de automatische kraan activeert niet. Waar ligt het probleem?",
+      "Hoe maak ik een notificatie in Wifipool?",
+      "Mijn EPDM-zonneverwarming onderbreken voor dakraam/schouw — kan dat?",
+      "Mijn niveaumeting staat omgekeerd (hoog = laag). Wat doe ik?",
       "Hoe maak ik een zwembadaarding?",
-      "Is er een specificatie voor de maximale lengte van de voedingskabel van de pomp voor een frequentieregelaar?",
-      "Ik heb een lek aan de sonde van mijn zwembad. Hoe maak ik dit best lekdicht?"
+      "Mijn zoutelektrolysetoestel van mijn automatisch doseertoestel gaat niet aan. Hoe komt dat?"
     ]
   },
   {
@@ -106,9 +106,9 @@
     "question": "Comment installer le WiFiPool?",
     "category": "Installation",
     "answer": "We hebben je zwembadnaam en serienummers van de wifipool-apparaten nodig. Kies een originele zwembadnaam (niet ‘My Pool’). Stuur je hulpvraag naar je verkoper of naar info@beniferro.eu.",
-    "elapsed": 5.929931640625,
+    "elapsed": 0.3302288055419922,
     "match_rate": 25.0,
-    "quality_score": 35.0,
+    "quality_score": 45.0,
     "suggestions": [
       "Waar vind ik het Beniferro YouTube-kanaal?",
       "Wat is het verschil tussen de SR, HS, EL, SQ en LS versies?",
@@ -123,16 +123,16 @@
     "question": "Problème de chlore trop bas",
     "category": "Chimie",
     "answer": "Het lijkt erop dat er geen specifieke context beschikbaar is om je vraag te beantwoorden. Kun je meer details geven over wat je precies wilt weten?",
-    "elapsed": 21.84666872024536,
+    "elapsed": 19.12753701210022,
     "match_rate": 0.0,
     "quality_score": 10.0,
     "suggestions": [
-      "Mijn HS Zoutelektrolysetoestel van mijn automatisch doseertoestel gaat niet aan, hoe komt dat ?",
-      "De FLOW-sensor is correct aangesloten en werkt perfect – de pH-module detecteert de stroming op betrouwbare wijze.  De redoxmodule daarentegen toont permanent \"No Flow\", ook al stroomt er water en is de sensor actief. Is de Redox Flow sensor \"No Flow\"?",
-      "Hoe kan ik condensatie op mijn apparatuur vermijden?\nWat moet ik doen om mijn apparaat in de winter goed te bewaren?",
-      "Ik heb al een Wifipool-apparaat en wil een temperatuursmeting toevoegen. Wat moet ik bestellen en hoe installeer ik dit?",
-      "Ik heb hulp nodig met de installatie van mijn Wifipool. Wat hebben jullie nodig?",
-      "Wat gebeurt er als bij een wifipool apparaat de wifi (of ethernet) wegvalt?"
+      "Geeft een zoutelektrolysetoestel een zoute smaak aan het water?",
+      "Is het Wifipool-doseertoestel via wifi met internet en cloud verbonden?",
+      "Er staan metingen in het Wifipool-wiel die ik niet heb. Hoe haal ik ze weg?",
+      "Mijn pH-meting wijkt af van mijn andere metingen. Wat doe ik?",
+      "Waarom is wifipool uitermate geschikt voor spa’s ?",
+      "Mijn EPDM-zonneverwarming onderbreken voor dakraam/schouw — kan dat?"
     ]
   },
   {
@@ -140,9 +140,9 @@
     "question": "Comment nettoyer le filtre?",
     "category": "Entretien",
     "answer": "Programmeert u een startvertraging van ca. 15 minuten na het inschakelen van de filterpomp. Tijdens het herstarten kunnen pH en RX kortstondig afwijken tot het systeem stabiliseert. Vermijd dosering (pH/Chloor) in die periode.",
-    "elapsed": 5.557605743408203,
+    "elapsed": 0.341580867767334,
     "match_rate": 0.0,
-    "quality_score": 10.0,
+    "quality_score": 20.0,
     "suggestions": [
       "Hoe kan ik de naam van mijn zwembad aanpassen in de wifipool app?",
       "Hoe kan ik een timer toevoegen aan mijn automatisatie?",
@@ -157,9 +157,9 @@
     "question": "Eau verte dans la piscine",
     "category": "Problème eau",
     "answer": "Je vindt je naam onder het wiel en bovenaan de pagina zwembad instellingen, en ook onder het wiel .",
-    "elapsed": 5.803246974945068,
+    "elapsed": 0.6415793895721436,
     "match_rate": 0.0,
-    "quality_score": 10.0,
+    "quality_score": 20.0,
     "suggestions": [
       "Ik wil EPDM-zonnematten leggen voor een zwembad. Wat heb ik nodig?",
       "Is proportionele dosering mogelijk op basis van het ingestelde pH-setpoint?",
