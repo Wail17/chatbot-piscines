@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wifipool Assistant</title>
+    <title>Wifipool Assistent</title>
     <style>
         * {
             margin: 0;
@@ -390,10 +390,10 @@
     <div class="chat-header">
         <div class="bot-avatar-header">🏊</div>
         <div class="header-info">
-            <h1>Assistant Wifipool</h1>
+            <h1>Wifipool Assistent</h1>
             <div class="status">
                 <span class="status-dot"></span>
-                En ligne · prêt à vous aider
+                Online · klaar om te helpen
             </div>
         </div>
         <div class="header-logo">WiFiPool<br>Support</div>
@@ -406,8 +406,8 @@
             <div class="bot-avatar">🏊</div>
             <div>
                 <div class="bubble bot">
-                    Bonjour ! Je suis l'assistant Wifipool. Je peux répondre à toutes vos questions sur l'entretien et l'utilisation de votre piscine connectée. 💧<br><br>
-                    Comment puis-je vous aider ?
+                    Hallo! Ik ben de Wifipool assistent. Ik kan al je vragen beantwoorden over het onderhoud en gebruik van je slimme zwembad. 💧<br><br>
+                    Hoe kan ik je helpen?
                 </div>
                 <div class="bubble-time" id="welcomeTime"></div>
             </div>
@@ -415,21 +415,21 @@
     </div>
 
     <!-- Quick questions -->
-    <div class="quick-label">Questions fréquentes</div>
+    <div class="quick-label">Veelgestelde vragen</div>
     <div class="quick-questions" id="quickQuestions">
-        <span class="quick-chip" data-q="Comment régler le pH de ma piscine ?">💧 Régler le pH</span>
-        <span class="quick-chip" data-q="Problème de pompe, que faire ?">⚙️ Problème pompe</span>
-        <span class="quick-chip" data-q="Comment entretenir ma piscine ?">🧹 Entretien piscine</span>
-        <span class="quick-chip" data-q="Qu'est-ce que le RX redox ?">📊 RX / Redox</span>
-        <span class="quick-chip" data-q="Comment installer le WiFiPool ?">📱 Installation</span>
-        <span class="quick-chip" data-q="Ma piscine a une fuite, que faire ?">🔧 Fuite détectée</span>
+        <span class="quick-chip" data-q="Hoe kan ik de pH instellen?">💧 pH instellen</span>
+        <span class="quick-chip" data-q="Probleem met de pomp, wat moet ik doen?">⚙️ Pomp probleem</span>
+        <span class="quick-chip" data-q="Hoe onderhoud ik mijn zwembad?">🧹 Zwembad onderhoud</span>
+        <span class="quick-chip" data-q="Wat is RX redox?">📊 RX / Redox</span>
+        <span class="quick-chip" data-q="Hoe installeer ik WiFiPool?">📱 Installatie</span>
+        <span class="quick-chip" data-q="Mijn zwembad lekt, wat nu?">🔧 Lek gedetecteerd</span>
     </div>
 
     <!-- Input -->
     <div class="chat-input-area">
         <textarea
             id="userInput"
-            placeholder="Posez votre question…"
+            placeholder="Stel je vraag…"
             rows="1"
             maxlength="500"
         ></textarea>
@@ -629,8 +629,8 @@
         } catch (err) {
             removeTyping();
             let msg = err.name === 'TimeoutError'
-                ? 'La réponse a pris trop de temps. Veuillez réessayer.'
-                : `Impossible de joindre le serveur. Vérifiez votre connexion.`;
+                ? 'Het antwoord duurde te lang. Probeer opnieuw.'
+                : `Kan de server niet bereiken. Controleer je verbinding.`;
             addMessage(msg, 'error');
         } finally {
             sendBtn.disabled = false;
