@@ -91,6 +91,40 @@ _GEN_HEADER_RE = re.compile(r"(?im)^\s*gen\s*([123])\s*[:\-–\.]\s*")
 # ============================================================================
 
 @lru_cache(maxsize=LANGUAGE_DETECTION_CACHE_SIZE if ENABLE_TRANSLATION_CACHE else 0)
+def _simple_language_detect(text: str) -> str:
+    """
+    Simple keyword-based language detection as fallback.
+    Returns 'fr', 'nl', 'en', 'de', or '' if unsure.
+    """
+    text_lower = text.lower()
+
+    # French indicators
+    french_words = ['comment', 'pourquoi', 'qu\'est-ce', 'quelle', 'quel', 'piscine',
+                   'problème', 'faire', 'régler', 'entretien', 'chlore', 'où']
+    fr_count = sum(1 for word in french_words if word in text_lower)
+
+    # Dutch indicators
+    dutch_words = ['hoe', 'waarom', 'wat', 'welke', 'zwembad', 'probleem',
+                  'doen', 'instellen', 'onderhoud', 'chloor', 'waar', 'kan', 'moet']
+    nl_count = sum(1 for word in dutch_words if word in text_lower)
+
+    # English indicators
+    english_words = ['how', 'why', 'what', 'which', 'pool', 'problem',
+                    'do', 'set', 'maintenance', 'chlorine', 'where', 'can', 'should']
+    en_count = sum(1 for word in english_words if word in text_lower)
+
+    # German indicators
+    german_words = ['wie', 'warum', 'was', 'welche', 'schwimmbad', 'problem',
+                   'machen', 'einstellen', 'wartung', 'chlor', 'wo', 'kann', 'muss']
+    de_count = sum(1 for word in german_words if word in text_lower)
+
+    # Pick language with most matches
+    scores = {'fr': fr_count, 'nl': nl_count, 'en': en_count, 'de': de_count}
+    max_lang = max(scores, key=scores.get)
+
+    return max_lang if scores[max_lang] > 0 else ""
+
+
 def detect_language_code(text: str) -> str:
     """
     Detect the language code of the given text using OpenAI.
@@ -106,6 +140,12 @@ def detect_language_code(text: str) -> str:
     snippet = (text or "").strip()
     if not snippet:
         return ""
+
+    # Try simple keyword detection first (fast, no API call)
+    simple_lang = _simple_language_detect(snippet)
+    if simple_lang:
+        logger.debug(f"Simple language detection: {simple_lang}")
+        return simple_lang
 
     # Limit snippet length for API efficiency
     snippet = snippet[:400]
