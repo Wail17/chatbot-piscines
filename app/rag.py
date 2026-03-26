@@ -17,6 +17,7 @@ import os
 from functools import lru_cache
 
 from openai import OpenAI
+from anthropic import Anthropic
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 
@@ -32,6 +33,8 @@ from .config import (
     TRANSLATION_CACHE_SIZE,
     LANGUAGE_DETECTION_CACHE_SIZE,
     ENABLE_TRANSLATION_CACHE,
+    ANTHROPIC_API_KEY,
+    OPENAI_API_KEY,
 )
 from .utils import normalize_text, normalize_language_code, log_error
 
@@ -61,20 +64,31 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# OpenAI client initialization with robust error handling
-_api_key = os.environ.get("OPENAI_API_KEY")
-client: Optional[OpenAI] = None
-
-if _api_key:
+# Anthropic (Claude) client initialization for language detection & translation
+anthropic_client: Optional[Anthropic] = None
+if ANTHROPIC_API_KEY:
     try:
-        client = OpenAI(api_key=_api_key)
-        logger.info("✅ OpenAI client initialized successfully")
+        anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        logger.info("✅ Anthropic (Claude) client initialized successfully")
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to initialize Anthropic client: {e}")
+        anthropic_client = None
+else:
+    logger.warning("⚠️  ANTHROPIC_API_KEY missing - Language detection and translation will be limited")
+    anthropic_client = None
+
+# OpenAI client initialization (for embeddings only)
+openai_client: Optional[OpenAI] = None
+if OPENAI_API_KEY:
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        logger.info("✅ OpenAI client initialized successfully (embeddings only)")
     except Exception as e:
         logger.warning(f"⚠️  Failed to initialize OpenAI client: {e}")
-        client = None
+        openai_client = None
 else:
-    logger.warning("⚠️  OPENAI_API_KEY missing - AI features will be disabled")
-    client = None
+    logger.warning("⚠️  OPENAI_API_KEY missing - Embeddings will be disabled")
+    openai_client = None
 
 
 # GEN pattern detection (for pool equipment generations)
@@ -127,7 +141,7 @@ def _simple_language_detect(text: str) -> str:
 
 def detect_language_code(text: str) -> str:
     """
-    Detect the language code of the given text using OpenAI.
+    Detect the language code of the given text using Claude.
 
     Cached for performance. Returns empty string if detection fails.
 
@@ -150,32 +164,35 @@ def detect_language_code(text: str) -> str:
     # Limit snippet length for API efficiency
     snippet = snippet[:400]
 
-    if client is None:
-        logger.debug("OpenAI client not available for language detection")
+    if anthropic_client is None:
+        logger.debug("Anthropic client not available for language detection")
         return ""
 
     try:
         prompt = (
             "Identify the dominant ISO 639-1 language code for the user's text below. "
-            "Reply with the two-letter code only. If unsure, guess the most likely language.\n\n"
+            "Reply with ONLY the two-letter code (e.g., 'fr', 'nl', 'en', 'de'). "
+            "If unsure, guess the most likely language.\n\n"
             f"Text:\n{snippet}"
         )
 
-        resp = client.chat.completions.create(
+        resp = anthropic_client.messages.create(
             model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
             max_tokens=10,
+            temperature=0.0,
+            messages=[{"role": "user", "content": prompt}]
         )
 
-        raw = resp.choices[0].message.content.strip().lower()
+        raw = resp.content[0].text.strip().lower()
 
         # Try to extract 2-letter code
         if re.fullmatch(r"[a-z]{2}", raw):
+            logger.debug(f"Claude detected language: {raw}")
             return raw
 
         match = re.search(r"([a-z]{2})", raw)
         if match:
+            logger.debug(f"Claude detected language (extracted): {match.group(1)}")
             return match.group(1)
 
     except Exception as e:
@@ -187,26 +204,28 @@ def detect_language_code(text: str) -> str:
 @lru_cache(maxsize=TRANSLATION_CACHE_SIZE if ENABLE_TRANSLATION_CACHE else 0)
 def _cached_translation(prompt: str) -> str:
     """
-    Internal cached translation function.
+    Internal cached translation function using Claude.
 
     Args:
-        prompt: Translation prompt for OpenAI
+        prompt: Translation prompt for Claude
 
     Returns:
         Translated text or empty string if failed
     """
-    if client is None:
-        logger.debug("OpenAI client not available for translation")
+    if anthropic_client is None:
+        logger.debug("Anthropic client not available for translation")
         return ""
 
     try:
-        resp = client.chat.completions.create(
+        resp = anthropic_client.messages.create(
             model=LLM_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
             max_tokens=1000,
+            temperature=0.2,
+            messages=[{"role": "user", "content": prompt}]
         )
-        return (resp.choices[0].message.content or "").strip()
+        result = resp.content[0].text.strip()
+        logger.debug(f"Claude translation complete: {len(result)} chars")
+        return result
     except Exception as e:
         log_error(e, "Translation failed", prompt_preview=prompt[:100])
         return ""

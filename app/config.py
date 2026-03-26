@@ -15,14 +15,19 @@ logging.basicConfig(
 # --- Collection Name ---
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "piscines")
 
-# --- OpenAI Configuration ---
+# --- API Configuration ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "text-embedding-3-large")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-# Validate API key presence
+# Model Configuration
+LLM_MODEL = os.getenv("LLM_MODEL", "claude-3-5-haiku-20241022")  # Claude for language detection & translation
+EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "text-embedding-3-large")  # OpenAI for embeddings
+
+# Validate API keys
 if not OPENAI_API_KEY:
-    logging.warning("⚠️  OPENAI_API_KEY not set - AI features will be limited")
+    logging.warning("⚠️  OPENAI_API_KEY not set - Embeddings will be limited")
+if not ANTHROPIC_API_KEY:
+    logging.warning("⚠️  ANTHROPIC_API_KEY not set - Language detection and translation will be limited")
 
 # --- Directory Configuration ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
