@@ -69,9 +69,10 @@ def test_chatbot():
             total = len(test['expected_keywords'])
             accuracy = (matched / total * 100) if total > 0 else 0
 
-            print(f"✅ Response in {elapsed:.2f}s")
+            source = data.get('source', 'unknown')
+            print(f"✅ Response in {elapsed:.2f}s (source: {source})")
             print(f"📊 Keywords: {matched}/{total} ({accuracy:.0f}%)")
-            print(f"📝 Answer: {answer[:100]}...")
+            print(f"📝 Full Answer:\n{answer}\n")
 
             results.append({
                 "success": True,

@@ -7,7 +7,7 @@ pydantic==2.5.3
 openai==1.10.0
 langchain==0.1.5
 langchain-openai==0.0.5
-langchain-community==0.0.16
+langchain-community==0.0.17
 
 # AI/ML - Anthropic Claude (language detection + translation)
 anthropic==0.18.1
