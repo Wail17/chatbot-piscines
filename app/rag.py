@@ -44,6 +44,7 @@ try:
     JSONL_AVAILABLE = True
 except ImportError:
     JSONL_AVAILABLE = False
+    DEFAULT_FAQ_JSONL = os.path.join(os.path.dirname(__file__), "data", "faq.jsonl")
 
 # Import synonym system (always available, no API needed)
 try:

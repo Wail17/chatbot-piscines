@@ -11,7 +11,7 @@ except Exception:  # pragma: no cover - fallback path
 
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from rapidfuzz import fuzz
 

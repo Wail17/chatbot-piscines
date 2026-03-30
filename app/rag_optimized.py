@@ -20,7 +20,7 @@ When to use embeddings:
 
 from typing import List, Optional
 import logging
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from .keyword_search import keyword_search_as_documents
 from .rag_pure import retrieve_pure_semantic
