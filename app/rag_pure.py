@@ -15,7 +15,7 @@ Better to return 1 perfect match than 5 diverse but wrong matches.
 
 from typing import List, Optional, Dict, Any
 import logging
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 from .faq_jsonl import get_faq_manager
 from .config import TOP_K
