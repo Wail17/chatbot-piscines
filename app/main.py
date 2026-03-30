@@ -2678,3 +2678,9 @@ async def serve_frontend():
     """Serve the index.html file at root"""
     index_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "index.html")
     return FileResponse(index_path)
+
+@app.get("/dashboard")
+async def serve_dashboard():
+    """Serve the admin dashboard"""
+    dashboard_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard.html")
+    return FileResponse(dashboard_path)

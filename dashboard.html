@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pool Chatbot — Admin Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --sidebar-bg: #1a1a2e;
+      --sidebar-accent: #16213e;
+      --sidebar-active: #0f3460;
+      --primary: #6c63ff;
+      --primary-hover: #574fd6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text-primary: #1f2937;
+      --text-secondary: #6b7280;
+      --bg-page: #f8fafc;
+      --bg-card: #ffffff;
+      --border: #e5e7eb;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.10);
+      --radius-sm: 6px;
+      --radius-md: 12px;
+      --transition: 0.2s ease;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Layout ────────────────────────────────────────────── */
+    .layout {
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ───────────────────────────────────────────── */
+    .sidebar {
+      width: 240px;
+      min-width: 240px;
+      background: var(--sidebar-bg);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      z-index: 10;
+    }
+
+    .sidebar-header {
+      padding: 28px 20px 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sidebar-logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--primary), #a78bfa);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .sidebar-logo-text {
+      color: #fff;
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1.2;
+    }
+
+    .sidebar-logo-sub {
+      color: rgba(255,255,255,0.4);
+      font-size: 11px;
+      font-weight: 400;
+    }
+
+    .sidebar-nav {
+      padding: 16px 12px;
+      flex: 1;
+    }
+
+    .sidebar-section-label {
+      color: rgba(255,255,255,0.3);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0 8px;
+      margin: 16px 0 6px;
+    }
+
+    .sidebar-section-label:first-child { margin-top: 0; }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      color: rgba(255,255,255,0.55);
+      cursor: pointer;
+      transition: background var(--transition), color var(--transition);
+      font-size: 13.5px;
+      font-weight: 500;
+      margin-bottom: 2px;
+      user-select: none;
+    }
+
+    .nav-item:hover {
+      background: var(--sidebar-accent);
+      color: rgba(255,255,255,0.9);
+    }
+
+    .nav-item.active {
+      background: var(--sidebar-active);
+      color: #fff;
+    }
+
+    .nav-item .nav-icon { font-size: 16px; min-width: 20px; text-align: center; }
+
+    .nav-item .nav-badge {
+      margin-left: auto;
+      background: var(--primary);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 20px;
+      line-height: 16px;
+    }
+
+    .sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.3);
+      font-size: 11px;
+    }
+
+    /* ── Main ──────────────────────────────────────────────── */
+    .main {
+      flex: 1;
+      overflow-y: auto;
+      background: var(--bg-page);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top bar ───────────────────────────────────────────── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 5;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .topbar-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .topbar-refresh {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .topbar-refresh:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .topbar-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Content ───────────────────────────────────────────── */
+    .content {
+      padding: 28px 32px;
+      flex: 1;
+    }
+
+    /* ── Section ───────────────────────────────────────────── */
+    .section { display: none; }
+    .section.active { display: block; }
+
+    .section-header {
+      margin-bottom: 24px;
+    }
+
+    .section-header h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .section-header p {
+      color: var(--text-secondary);
+      font-size: 13.5px;
+      margin-top: 3px;
+    }
+
+    /* ── Cards ─────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      padding: 20px 24px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    /* ── Stat Cards ────────────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: box-shadow var(--transition), transform var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      border-radius: var(--radius-md) var(--radius-md) 0 0;
+    }
+
+    .stat-card:nth-child(1)::before { background: linear-gradient(90deg, var(--primary), #a78bfa); }
+    .stat-card:nth-child(2)::before { background: linear-gradient(90deg, var(--success), #34d399); }
+    .stat-card:nth-child(3)::before { background: linear-gradient(90deg, var(--warning), #fbbf24); }
+    .stat-card:nth-child(4)::before { background: linear-gradient(90deg, #06b6d4, #67e8f9); }
+
+    .stat-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+
+    .stat-card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .stat-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+    }
+
+    .stat-card:nth-child(1) .stat-icon { background: rgba(108,99,255,0.12); }
+    .stat-card:nth-child(2) .stat-icon { background: rgba(16,185,129,0.12); }
+    .stat-card:nth-child(3) .stat-icon { background: rgba(245,158,11,0.12); }
+    .stat-card:nth-child(4) .stat-icon { background: rgba(6,182,212,0.12); }
+
+    .stat-value {
+      font-size: 30px;
+      font-weight: 800;
+      color: var(--text-primary);
+      line-height: 1;
+      letter-spacing: -0.5px;
+    }
+
+    .stat-sub {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* ── Charts Grid ───────────────────────────────────────── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    .chart-card {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      padding: 20px 24px;
+    }
+
+    .chart-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .chart-card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .chart-wrap { position: relative; }
+    .chart-wrap canvas { max-width: 100%; }
+
+    /* ── Period Pills ──────────────────────────────────────── */
+    .period-pills {
+      display: flex;
+      gap: 6px;
+    }
+
+    .period-pill {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      background: transparent;
+      transition: all var(--transition);
+      user-select: none;
+    }
+
+    .period-pill:hover { border-color: var(--primary); color: var(--primary); }
+    .period-pill.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    /* ── Top Questions ─────────────────────────────────────── */
+    .top-q-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .top-q-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .top-q-rank {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--bg-page);
+      border: 1px solid var(--border);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .top-q-item:nth-child(1) .top-q-rank { background: #fef3c7; border-color: #fbbf24; color: #d97706; }
+    .top-q-item:nth-child(2) .top-q-rank { background: #f1f5f9; border-color: #94a3b8; color: #475569; }
+    .top-q-item:nth-child(3) .top-q-rank { background: #fef3e2; border-color: #fdba74; color: #ea580c; }
+
+    .top-q-body { flex: 1; min-width: 0; }
+
+    .top-q-text {
+      font-size: 13px;
+      color: var(--text-primary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+
+    .top-q-bar-wrap {
+      height: 4px;
+      background: var(--bg-page);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .top-q-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), #a78bfa);
+      border-radius: 2px;
+      transition: width 0.6s ease;
+    }
+
+    .top-q-count {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      flex-shrink: 0;
+    }
+
+    /* ── FAQ Manager ───────────────────────────────────────── */
+    .faq-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .faq-search {
+      flex: 1;
+      max-width: 360px;
+      position: relative;
+    }
+
+    .faq-search input {
+      width: 100%;
+      padding: 9px 12px 9px 36px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 13.5px;
+      background: var(--bg-card);
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .faq-search input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(108,99,255,0.12);
+    }
+
+    .faq-search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-secondary);
+      font-size: 15px;
+      pointer-events: none;
+    }
+
+    .faq-count {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-left: auto;
+    }
+
+    /* ── Buttons ───────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all var(--transition);
+      text-decoration: none;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .btn-primary:hover { background: var(--primary-hover); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: #dc2626; }
+
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn-icon {
+      padding: 6px 8px;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text-secondary);
+      transition: all var(--transition);
+    }
+
+    .btn-icon:hover { border-color: var(--primary); color: var(--primary); background: rgba(108,99,255,0.06); }
+    .btn-icon.danger:hover { border-color: var(--danger); color: var(--danger); background: rgba(239,68,68,0.06); }
+
+    /* ── Table ─────────────────────────────────────────────── */
+    .table-wrap {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      background: var(--bg-page);
+      padding: 11px 16px;
+      text-align: left;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background var(--transition);
+    }
+
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: #fafbfc; }
+
+    tbody td {
+      padding: 12px 16px;
+      font-size: 13.5px;
+      color: var(--text-primary);
+      vertical-align: middle;
+    }
+
+    .td-truncate {
+      max-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .table-actions { display: flex; gap: 6px; }
+
+    /* ── Category Badge ────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .badge-cat {
+      background: rgba(108,99,255,0.1);
+      color: var(--primary);
+    }
+
+    .badge-high {
+      background: rgba(239,68,68,0.1);
+      color: var(--danger);
+    }
+
+    .badge-medium {
+      background: rgba(245,158,11,0.1);
+      color: var(--warning);
+    }
+
+    /* ── Pagination ────────────────────────────────────────── */
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-card);
+    }
+
+    .pagination-info { font-size: 13px; color: var(--text-secondary); }
+
+    .pagination-btns { display: flex; gap: 4px; }
+
+    .page-btn {
+      min-width: 32px;
+      height: 32px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+    }
+
+    .page-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+    .page-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Modal ─────────────────────────────────────────────── */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      backdrop-filter: blur(2px);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--transition);
+    }
+
+    .modal-overlay.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .modal {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+      width: 100%;
+      max-width: 560px;
+      max-height: 90vh;
+      overflow-y: auto;
+      transform: translateY(16px) scale(0.98);
+      transition: transform var(--transition);
+    }
+
+    .modal-overlay.open .modal { transform: translateY(0) scale(1); }
+
+    .modal-lg { max-width: 720px; }
+
+    .modal-header {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .modal-close {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: transparent;
+      cursor: pointer;
+      font-size: 16px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition);
+    }
+
+    .modal-close:hover { background: var(--bg-page); color: var(--text-primary); }
+
+    .modal-body { padding: 20px 24px; }
+
+    .modal-footer {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    /* ── Form ──────────────────────────────────────────────── */
+    .form-group { margin-bottom: 16px; }
+
+    .form-label {
+      display: block;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+
+    .form-label span { color: var(--danger); }
+
+    .form-input, .form-textarea, .form-select {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 13.5px;
+      font-family: inherit;
+      color: var(--text-primary);
+      background: var(--bg-card);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .form-input:focus, .form-textarea:focus, .form-select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(108,99,255,0.12);
+    }
+
+    .form-textarea { resize: vertical; min-height: 90px; }
+
+    .form-hint {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    /* ── Gap Cards ─────────────────────────────────────────── */
+    .gap-banner {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: var(--radius-md);
+      padding: 20px 24px;
+      color: #fff;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .gap-banner-icon { font-size: 36px; flex-shrink: 0; }
+
+    .gap-banner-text h3 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+    .gap-banner-text p { font-size: 13px; opacity: 0.85; }
+
+    .gap-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .gap-card {
+      background: var(--bg-card);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: box-shadow var(--transition), transform var(--transition);
+    }
+
+    .gap-card:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+
+    .gap-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+
+    .gap-card-question {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.45;
+      flex: 1;
+    }
+
+    .gap-card-footer { display: flex; align-items: center; justify-content: space-between; }
+
+    .gap-asked {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    /* ── Toast ─────────────────────────────────────────────── */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 280px;
+      max-width: 360px;
+      pointer-events: all;
+      animation: toastIn 0.25s ease;
+      font-size: 13.5px;
+      color: var(--text-primary);
+    }
+
+    .toast.success { border-left: 3px solid var(--success); }
+    .toast.error { border-left: 3px solid var(--danger); }
+    .toast.info { border-left: 3px solid var(--primary); }
+
+    .toast-icon { font-size: 16px; flex-shrink: 0; }
+    .toast-msg { flex: 1; }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    @keyframes toastOut {
+      from { opacity: 1; transform: translateX(0); }
+      to { opacity: 0; transform: translateX(20px); }
+    }
+
+    /* ── Loading / Empty ───────────────────────────────────── */
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px;
+      gap: 12px;
+      color: var(--text-secondary);
+      font-size: 13.5px;
+    }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 56px 24px;
+      gap: 12px;
+      text-align: center;
+    }
+
+    .empty-state-icon { font-size: 48px; opacity: 0.4; }
+    .empty-state-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+    .empty-state-text { font-size: 13.5px; color: var(--text-secondary); max-width: 320px; }
+
+    /* ── View Modal Detail ─────────────────────────────────── */
+    .detail-field { margin-bottom: 16px; }
+    .detail-field:last-child { margin-bottom: 0; }
+    .detail-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+    .detail-value {
+      font-size: 14px;
+      color: var(--text-primary);
+      line-height: 1.6;
+      word-break: break-word;
+    }
+    .detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+    .detail-tag {
+      background: rgba(108,99,255,0.1);
+      color: var(--primary);
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    /* ── Scrollbar ─────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #d1d5db; }
+
+    /* ── Responsive hint ───────────────────────────────────── */
+    @media (max-width: 900px) {
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+      .charts-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ═══════════════════════════════════════════════════════
+       SIDEBAR
+  ═══════════════════════════════════════════════════════ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <div class="sidebar-logo-icon">🏊</div>
+        <div>
+          <div class="sidebar-logo-text">Pool Chatbot</div>
+          <div class="sidebar-logo-sub">Beheer</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="sidebar-section-label">Navigatie</div>
+
+      <div class="nav-item active" onclick="showSection('overview')" id="nav-overview">
+        <span class="nav-icon">📊</span>
+        <span>Overzicht</span>
+      </div>
+      <div class="nav-item" onclick="showSection('stats')" id="nav-stats">
+        <span class="nav-icon">📈</span>
+        <span>Statistieken</span>
+      </div>
+      <div class="nav-item" onclick="showSection('faq')" id="nav-faq">
+        <span class="nav-icon">💬</span>
+        <span>FAQ Beheer</span>
+      </div>
+      <div class="nav-item" onclick="showSection('gaps')" id="nav-gaps">
+        <span class="nav-icon">⭐</span>
+        <span>FAQ Intelligence</span>
+        <span class="nav-badge" id="nav-gaps-badge" style="display:none">!</span>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      Pool Chatbot Admin &nbsp;·&nbsp; v2.0
+    </div>
+  </aside>
+
+  <!-- ═══════════════════════════════════════════════════════
+       MAIN
+  ═══════════════════════════════════════════════════════ -->
+  <div class="main">
+
+    <!-- Top Bar -->
+    <div class="topbar">
+      <div class="topbar-title" id="topbar-title">Overzicht</div>
+      <div class="topbar-right">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
+          <div class="topbar-dot"></div>
+          Online
+        </div>
+        <button class="topbar-refresh" onclick="refreshCurrent()">
+          <span>↻</span> Vernieuwen
+        </button>
+      </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: Vue d'ensemble
+      ───────────────────────────────────────────────── -->
+      <div class="section active" id="section-overview">
+        <div class="section-header">
+          <h2>Overzicht</h2>
+          <p>Samenvatting van de chatbot prestaties van de afgelopen 7 dagen</p>
+        </div>
+
+        <div class="stat-grid" id="overview-stats">
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <span class="stat-label">Vragen (7d)</span>
+              <div class="stat-icon">💬</div>
+            </div>
+            <div class="stat-value" id="stat-questions">—</div>
+            <div class="stat-sub">gebruikersinteracties</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <span class="stat-label">Antwoordpercentage</span>
+              <div class="stat-icon">✅</div>
+            </div>
+            <div class="stat-value" id="stat-answer-rate">—</div>
+            <div class="stat-sub">beantwoorde vragen</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <span class="stat-label">FAQ-vermeldingen</span>
+              <div class="stat-icon">📚</div>
+            </div>
+            <div class="stat-value" id="stat-faq-count">—</div>
+            <div class="stat-sub">gepubliceerde items</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-card-header">
+              <span class="stat-label">Hoofdtaal</span>
+              <div class="stat-icon">🌐</div>
+            </div>
+            <div class="stat-value" id="stat-lang" style="font-size:22px;padding-top:4px;">—</div>
+            <div class="stat-sub">dominante taal</div>
+          </div>
+        </div>
+
+        <!-- Quick activity snapshot -->
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-title">Recente activiteit — 7 dagen</div>
+          <div class="chart-wrap" style="height:200px;">
+            <canvas id="chart-overview-bar"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: Statistiques
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-stats">
+        <div class="section-header">
+          <h2>Statistieken</h2>
+          <p>Gedetailleerde analyse van de chatbot activiteit</p>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+          <div class="period-pills">
+            <button class="period-pill" onclick="setPeriod(1)">Vandaag</button>
+            <button class="period-pill active" onclick="setPeriod(7)">Week</button>
+            <button class="period-pill" onclick="setPeriod(30)">Maand</button>
+            <button class="period-pill" onclick="setPeriod(365)">Jaar</button>
+          </div>
+          <span id="stats-period-label" style="font-size:12px;color:var(--text-secondary);"></span>
+        </div>
+
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">Dagelijkse activiteit</span>
+            </div>
+            <div class="chart-wrap" style="height:240px;">
+              <canvas id="chart-daily"></canvas>
+            </div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-card-header">
+              <span class="chart-card-title">Taaldistributie</span>
+            </div>
+            <div class="chart-wrap" style="height:240px;">
+              <canvas id="chart-lang"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <span class="chart-card-title">Top 10 gestelde vragen</span>
+          </div>
+          <div id="top-q-container">
+            <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: FAQ Beheer
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-faq">
+        <div class="section-header">
+          <h2>FAQ Beheer</h2>
+          <p>Maak, bewerk en verwijder kennisbank-items</p>
+        </div>
+
+        <div class="faq-toolbar">
+          <div class="faq-search">
+            <span class="faq-search-icon">🔍</span>
+            <input type="text" id="faq-search-input" placeholder="Zoek een vraag, antwoord of categorie…" oninput="onSearchInput()" />
+          </div>
+          <button class="btn btn-primary" onclick="openCreateModal()">
+            <span>＋</span> Nieuwe FAQ
+          </button>
+          <span class="faq-count" id="faq-count-label"></span>
+        </div>
+
+        <div class="table-wrap" id="faq-table-wrap">
+          <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
+        </div>
+
+        <div id="faq-pagination"></div>
+      </div>
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: FAQ Intelligence
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-gaps">
+        <div class="section-header">
+          <h2>FAQ Intelligence ⭐</h2>
+          <p>Onbeantwoorde vragen gedetecteerd door de chatbot</p>
+        </div>
+
+        <div class="gap-banner">
+          <div class="gap-banner-icon">🧠</div>
+          <div class="gap-banner-text">
+            <h3>Verbeter uw dekkingsgraad</h3>
+            <p>Deze vragen hadden geen antwoord. Voeg ze toe om uw SAV-team te ontlasten.</p>
+          </div>
+        </div>
+
+        <div id="gaps-container">
+          <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<!-- ═══════════════════════════════════════════════════════
+     MODAL: Créer / Modifier FAQ
+═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-faq" onclick="handleOverlayClick(event,'modal-faq')">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-faq-title">Nieuwe FAQ-vermelding</span>
+      <button class="modal-close" onclick="closeModal('modal-faq')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Categorie <span>*</span></label>
+          <input class="form-input" id="faq-cat" type="text" placeholder="ex: Entretien, Sécurité…" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Tags</label>
+          <input class="form-input" id="faq-tags" type="text" placeholder="tag1, tag2, tag3" />
+          <div class="form-hint">Scheid tags met komma's</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Question <span>*</span></label>
+        <textarea class="form-textarea" id="faq-question" placeholder="Voer de vraag in…" style="min-height:70px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Antwoord <span>*</span></label>
+        <textarea class="form-textarea" id="faq-answer" placeholder="Voer het volledige antwoord in…" style="min-height:120px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Video URL</label>
+        <input class="form-input" id="faq-video" type="url" placeholder="https://youtube.com/watch?v=…" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-faq')">Annuleren</button>
+      <button class="btn btn-primary" onclick="submitFaqForm()" id="faq-submit-btn">Opslaan</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MODAL: Voir FAQ
+═══════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-view" onclick="handleOverlayClick(event,'modal-view')">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <span class="modal-title">FAQ-vermelding detail</span>
+      <button class="modal-close" onclick="closeModal('modal-view')">✕</button>
+    </div>
+    <div class="modal-body" id="modal-view-body">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-view')">Sluiten</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TOAST CONTAINER
+═══════════════════════════════════════════════════════ -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ═══════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ─── State ───────────────────────────────────────────────── */
+let allFaqs = [], filteredFaqs = [], currentPage = 1, PAGE_SIZE = 20;
+let editingId = null, charts = {}, currentPeriod = 7;
+let currentSection = 'overview';
+
+/* ─── API ─────────────────────────────────────────────────── */
+const API = {
+  async get(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  },
+  async post(url, d) {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  },
+  async put(url, d) {
+    const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  },
+  async del(url) {
+    const r = await fetch(url, { method: 'DELETE' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+};
+
+/* ─── Navigation ──────────────────────────────────────────── */
+const SECTION_TITLES = {
+  overview: 'Overzicht',
+  stats: 'Statistiques',
+  faq: 'FAQ Beheer',
+  gaps: 'FAQ Intelligence ⭐'
+};
+
+function showSection(name) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const sec = document.getElementById('section-' + name);
+  if (sec) sec.classList.add('active');
+  const nav = document.getElementById('nav-' + name);
+  if (nav) nav.classList.add('active');
+  document.getElementById('topbar-title').textContent = SECTION_TITLES[name] || name;
+  currentSection = name;
+
+  if (name === 'overview') loadOverview();
+  if (name === 'stats') loadStats(currentPeriod);
+  if (name === 'faq') loadFaqManager();
+  if (name === 'gaps') loadGaps();
+}
+
+function refreshCurrent() { showSection(currentSection); }
+
+/* ─── Toast ───────────────────────────────────────────────── */
+function showToast(msg, type = 'info') {
+  const icons = { success: '✅', error: '❌', info: 'ℹ️' };
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<span class="toast-icon">${icons[type] || icons.info}</span><span class="toast-msg">${msg}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.animation = 'toastOut 0.25s ease forwards';
+    setTimeout(() => toast.remove(), 260);
+  }, 3000);
+}
+
+/* ─── Count-up animation ──────────────────────────────────── */
+function animateCount(el, target, suffix = '') {
+  if (isNaN(target)) { el.textContent = target; return; }
+  const duration = 900;
+  const start = performance.now();
+  const from = 0;
+  function step(now) {
+    const elapsed = now - start;
+    const progress = Math.min(elapsed / duration, 1);
+    const ease = 1 - Math.pow(1 - progress, 3);
+    const val = Math.round(from + (target - from) * ease);
+    el.textContent = val.toLocaleString('nl-NL') + suffix;
+    if (progress < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+/* ─── Chart colors ────────────────────────────────────────── */
+const CHART_COLORS = ['#6c63ff','#10b981','#f59e0b','#ef4444','#06b6d4','#8b5cf6','#ec4899','#84cc16'];
+
+/* ─── Overview ────────────────────────────────────────────── */
+async function loadOverview() {
+  try {
+    const [analytics, faqData] = await Promise.all([
+      API.get('/analytics?days=7'),
+      API.get('/admin/faq')
+    ]);
+
+    const summary = analytics.summary || {};
+    const totalQ = summary.total_questions || 0;
+    const answerRate = summary.answer_rate_pct || 0;
+    const faqCount = faqData.count || (Array.isArray(faqData) ? faqData.length : 0);
+
+    // Top language
+    const langDist = analytics.language_distribution || {};
+    let topLang = '—';
+    if (Object.keys(langDist).length) {
+      topLang = Object.entries(langDist).sort((a, b) => b[1] - a[1])[0][0];
+    }
+
+    animateCount(document.getElementById('stat-questions'), totalQ);
+    animateCount(document.getElementById('stat-answer-rate'), parseFloat(answerRate.toFixed(1)), '%');
+    animateCount(document.getElementById('stat-faq-count'), faqCount);
+    document.getElementById('stat-lang').textContent = topLang.toUpperCase();
+
+    // Mini bar chart
+    const daily = analytics.daily_activity || {};
+    const sortedDates = Object.keys(daily).sort();
+    const labels = sortedDates.map(d => d.slice(5));
+    const data = sortedDates.map(d => daily[d]);
+
+    if (charts.overviewBar) { charts.overviewBar.destroy(); }
+    const ctx = document.getElementById('chart-overview-bar').getContext('2d');
+    charts.overviewBar = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Questions',
+          data,
+          backgroundColor: 'rgba(108,99,255,0.7)',
+          borderRadius: 4,
+          borderSkipped: false
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#9ca3af' } },
+          y: { grid: { color: '#f3f4f6' }, ticks: { font: { size: 11 }, color: '#9ca3af' }, beginAtZero: true }
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('Overview load error:', e);
+    showToast('Kan overzichtsdata niet laden', 'error');
+    // Show fallback
+    ['stat-questions','stat-answer-rate','stat-faq-count'].forEach(id => {
+      document.getElementById(id).textContent = '—';
+    });
+  }
+}
+
+/* ─── Stats ───────────────────────────────────────────────── */
+function setPeriod(days) {
+  currentPeriod = days;
+  document.querySelectorAll('.period-pill').forEach(p => p.classList.remove('active'));
+  const map = { 1: 0, 7: 1, 30: 2, 365: 3 };
+  const pills = document.querySelectorAll('.period-pill');
+  if (pills[map[days]]) pills[map[days]].classList.add('active');
+  loadStats(days);
+}
+
+async function loadStats(days) {
+  const label = { 1: 'Vandaag', 7: 'Deze week', 30: 'Deze maand', 365: 'Dit jaar' };
+  const el = document.getElementById('stats-period-label');
+  if (el) el.textContent = label[days] || `${days} jours`;
+
+  try {
+    const analytics = await API.get(`/analytics?days=${days}`);
+    const daily = analytics.daily_activity || {};
+    const langDist = analytics.language_distribution || {};
+    const topQ = analytics.top_questions || [];
+
+    // Bar chart – daily (daily_activity is an object: {"2026-03-30": 5})
+    const sortedDates = Object.keys(daily).sort();
+    const labels = sortedDates.map(d => d.slice(5));
+    const data = sortedDates.map(d => daily[d]);
+
+    if (charts.daily) { charts.daily.destroy(); }
+    const ctxD = document.getElementById('chart-daily').getContext('2d');
+    charts.daily = new Chart(ctxD, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Questions',
+          data,
+          backgroundColor: 'rgba(108,99,255,0.75)',
+          hoverBackgroundColor: '#6c63ff',
+          borderRadius: 5,
+          borderSkipped: false
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} questions` } } },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#9ca3af', maxRotation: 45 } },
+          y: { grid: { color: '#f3f4f6' }, ticks: { font: { size: 11 }, color: '#9ca3af' }, beginAtZero: true }
+        }
+      }
+    });
+
+    // Doughnut – languages
+    const langKeys = Object.keys(langDist);
+    const langVals = Object.values(langDist);
+
+    if (charts.lang) { charts.lang.destroy(); }
+    const ctxL = document.getElementById('chart-lang').getContext('2d');
+    if (langKeys.length > 0) {
+      charts.lang = new Chart(ctxL, {
+        type: 'doughnut',
+        data: {
+          labels: langKeys,
+          datasets: [{
+            data: langVals,
+            backgroundColor: CHART_COLORS,
+            borderWidth: 2,
+            borderColor: '#fff',
+            hoverOffset: 6
+          }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 12, boxWidth: 12 } },
+            tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } }
+          },
+          cutout: '62%'
+        }
+      });
+    } else {
+      ctxL.canvas.parentNode.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🌐</div><div class="empty-state-text">Geen taaldata beschikbaar</div></div>';
+    }
+
+    // Top questions
+    renderTopQuestions(topQ);
+
+  } catch (e) {
+    console.warn('Stats load error:', e);
+    showToast('Kan statistieken niet laden', 'error');
+  }
+}
+
+function renderTopQuestions(topQ) {
+  const container = document.getElementById('top-q-container');
+  if (!topQ || topQ.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">Geen vragen</div><div class="empty-state-text">Geen data beschikbaar voor deze periode.</div></div>';
+    return;
+  }
+  const maxCount = Math.max(...topQ.map(q => q.count || 0)) || 1;
+  const top10 = topQ.slice(0, 10);
+  const html = `<div class="top-q-list">
+    ${top10.map((q, i) => `
+      <div class="top-q-item">
+        <div class="top-q-rank">${i + 1}</div>
+        <div class="top-q-body">
+          <div class="top-q-text" title="${escHtml(q.question || q.text || '')}">${escHtml(q.question || q.text || '—')}</div>
+          <div class="top-q-bar-wrap"><div class="top-q-bar" style="width:${Math.round(((q.count||0)/maxCount)*100)}%"></div></div>
+        </div>
+        <div class="top-q-count">${q.count || 0}</div>
+      </div>
+    `).join('')}
+  </div>`;
+  container.innerHTML = html;
+}
+
+/* ─── FAQ Manager ─────────────────────────────────────────── */
+async function loadFaqManager() {
+  document.getElementById('faq-table-wrap').innerHTML = '<div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>';
+  try {
+    const data = await API.get('/admin/faq');
+    allFaqs = Array.isArray(data) ? data : (data.faqs || data.items || []);
+    filterFaqs();
+  } catch (e) {
+    console.warn('FAQ load error:', e);
+    showToast('Kan FAQ niet laden', 'error');
+    allFaqs = [];
+    filterFaqs();
+  }
+}
+
+function onSearchInput() {
+  currentPage = 1;
+  filterFaqs();
+}
+
+function filterFaqs() {
+  const q = (document.getElementById('faq-search-input').value || '').toLowerCase().trim();
+  if (!q) {
+    filteredFaqs = [...allFaqs];
+  } else {
+    filteredFaqs = allFaqs.filter(f =>
+      (f.question || '').toLowerCase().includes(q) ||
+      (f.answer || f.response || '').toLowerCase().includes(q) ||
+      (f.category || f.categorie || '').toLowerCase().includes(q) ||
+      (Array.isArray(f.tags) ? f.tags.join(' ') : (f.tags || '')).toLowerCase().includes(q)
+    );
+  }
+  renderFaqTable();
+}
+
+function renderFaqTable() {
+  const wrap = document.getElementById('faq-table-wrap');
+  const countLabel = document.getElementById('faq-count-label');
+  const total = filteredFaqs.length;
+
+  countLabel.textContent = `${total} item${total !== 1 ? 's' : ''}`;
+
+  if (total === 0) {
+    wrap.innerHTML = `<div class="empty-state">
+      <div class="empty-state-icon">📭</div>
+      <div class="empty-state-title">Geen item gevonden</div>
+      <div class="empty-state-text">Pas uw zoekopdracht aan of maak een nieuw FAQ-item aan.</div>
+    </div>`;
+    document.getElementById('faq-pagination').innerHTML = '';
+    return;
+  }
+
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  if (currentPage > totalPages) currentPage = 1;
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const page = filteredFaqs.slice(start, start + PAGE_SIZE);
+
+  const rows = page.map(f => {
+    const id = f.id || f._id;
+    const cat = f.category || f.categorie || '';
+    const question = f.question || '';
+    const answer = f.answer || f.response || '';
+    return `<tr>
+      <td style="width:140px;"><span class="badge badge-cat">${escHtml(cat || '—')}</span></td>
+      <td class="td-truncate" style="max-width:260px;" title="${escHtml(question)}">${escHtml(question)}</td>
+      <td class="td-truncate" style="max-width:300px;color:var(--text-secondary);" title="${escHtml(answer)}">${escHtml(answer)}</td>
+      <td style="width:100px;">
+        <div class="table-actions">
+          <button class="btn-icon" title="Bekijken" onclick="openViewModal('${escAttr(id)}')">👁</button>
+          <button class="btn-icon" title="Bewerken" onclick="openEditModal('${escAttr(id)}')">✏️</button>
+          <button class="btn-icon danger" title="Verwijderen" onclick="deleteFaq('${escAttr(id)}')">🗑</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<table>
+    <thead>
+      <tr>
+        <th>Categorie</th>
+        <th>Vraag</th>
+        <th>Antwoord</th>
+        <th>Acties</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+
+  renderPagination(totalPages);
+}
+
+function renderPagination(totalPages) {
+  const container = document.getElementById('faq-pagination');
+  if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+  const total = filteredFaqs.length;
+  const start = (currentPage - 1) * PAGE_SIZE + 1;
+  const end = Math.min(currentPage * PAGE_SIZE, total);
+
+  let pages = '';
+  const range = 2;
+  for (let i = 1; i <= totalPages; i++) {
+    if (i === 1 || i === totalPages || (i >= currentPage - range && i <= currentPage + range)) {
+      pages += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="goToPage(${i})">${i}</button>`;
+    } else if (i === currentPage - range - 1 || i === currentPage + range + 1) {
+      pages += `<button class="page-btn" disabled>…</button>`;
+    }
+  }
+
+  container.innerHTML = `<div class="pagination">
+    <span class="pagination-info">${start}–${end} van ${total} items</span>
+    <div class="pagination-btns">
+      <button class="page-btn" onclick="goToPage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>‹</button>
+      ${pages}
+      <button class="page-btn" onclick="goToPage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>›</button>
+    </div>
+  </div>`;
+}
+
+function goToPage(p) {
+  currentPage = p;
+  renderFaqTable();
+  document.getElementById('section-faq').scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+/* ─── Modals ──────────────────────────────────────────────── */
+function openModal(id) {
+  document.getElementById(id).classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  document.body.style.overflow = '';
+  if (id === 'modal-faq') {
+    editingId = null;
+    clearFaqForm();
+  }
+}
+
+function handleOverlayClick(e, id) {
+  if (e.target === e.currentTarget) closeModal(id);
+}
+
+function clearFaqForm() {
+  ['faq-cat','faq-question','faq-answer','faq-video','faq-tags'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+}
+
+function openCreateModal(prefill = '') {
+  editingId = null;
+  clearFaqForm();
+  document.getElementById('modal-faq-title').textContent = 'Nieuwe FAQ-vermelding';
+  document.getElementById('faq-submit-btn').textContent = 'Opslaan';
+  if (prefill) {
+    document.getElementById('faq-question').value = prefill;
+  }
+  showSection('faq');
+  openModal('modal-faq');
+}
+
+function openEditModal(id) {
+  const faq = allFaqs.find(f => String(f.id || f._id) === String(id));
+  if (!faq) { showToast('Item niet gevonden', 'error'); return; }
+
+  editingId = id;
+  document.getElementById('modal-faq-title').textContent = 'FAQ-vermelding bewerken';
+  document.getElementById('faq-submit-btn').textContent = 'Bijwerken';
+  document.getElementById('faq-cat').value = faq.category || faq.categorie || '';
+  document.getElementById('faq-question').value = faq.question || '';
+  document.getElementById('faq-answer').value = faq.answer || faq.response || '';
+  document.getElementById('faq-video').value = faq.video_url || faq.video || '';
+  const tags = Array.isArray(faq.tags) ? faq.tags.join(', ') : (faq.tags || '');
+  document.getElementById('faq-tags').value = tags;
+  openModal('modal-faq');
+}
+
+function openViewModal(id) {
+  const faq = allFaqs.find(f => String(f.id || f._id) === String(id));
+  if (!faq) { showToast('Item niet gevonden', 'error'); return; }
+
+  const tags = Array.isArray(faq.tags) ? faq.tags : (faq.tags ? faq.tags.split(',').map(t => t.trim()) : []);
+  const tagsHtml = tags.length
+    ? `<div class="detail-tags">${tags.map(t => `<span class="detail-tag">${escHtml(t)}</span>`).join('')}</div>`
+    : '<span style="color:var(--text-secondary);font-size:13px;">Geen tags</span>';
+
+  document.getElementById('modal-view-body').innerHTML = `
+    <div class="detail-field">
+      <div class="detail-label">Categorie</div>
+      <div class="detail-value"><span class="badge badge-cat">${escHtml(faq.category || faq.categorie || '—')}</span></div>
+    </div>
+    <div class="detail-field">
+      <div class="detail-label">Vraag</div>
+      <div class="detail-value">${escHtml(faq.question || '—')}</div>
+    </div>
+    <div class="detail-field">
+      <div class="detail-label">Antwoord</div>
+      <div class="detail-value" style="white-space:pre-wrap;">${escHtml(faq.answer || faq.response || '—')}</div>
+    </div>
+    ${faq.video_url || faq.video ? `
+    <div class="detail-field">
+      <div class="detail-label">Video URL</div>
+      <div class="detail-value"><a href="${escAttr(faq.video_url || faq.video)}" target="_blank" style="color:var(--primary);">${escHtml(faq.video_url || faq.video)}</a></div>
+    </div>` : ''}
+    <div class="detail-field">
+      <div class="detail-label">Tags</div>
+      <div class="detail-value">${tagsHtml}</div>
+    </div>
+  `;
+  openModal('modal-view');
+}
+
+/* ─── CRUD ────────────────────────────────────────────────── */
+async function submitFaqForm() {
+  const cat = document.getElementById('faq-cat').value.trim();
+  const question = document.getElementById('faq-question').value.trim();
+  const answer = document.getElementById('faq-answer').value.trim();
+  const video = document.getElementById('faq-video').value.trim();
+  const tagsRaw = document.getElementById('faq-tags').value.trim();
+  const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+  if (!question) { showToast('Vraag is verplicht', 'error'); return; }
+  if (!answer) { showToast('Antwoord is verplicht', 'error'); return; }
+
+  const payload = {
+    category: cat, categorie: cat, question, answer, response: answer,
+    video_url: video, video, tags
+  };
+
+  const btn = document.getElementById('faq-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '…';
+
+  try {
+    if (editingId) {
+      await API.put(`/admin/faq/${editingId}`, payload);
+      showToast('Item succesvol bijgewerkt', 'success');
+    } else {
+      await API.post('/admin/faq', payload);
+      showToast('Nieuw item aangemaakt', 'success');
+    }
+    closeModal('modal-faq');
+    await loadFaqManager();
+    await loadOverview();
+  } catch (e) {
+    console.warn('Save error:', e);
+    showToast('Fout bij opslaan', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = editingId ? 'Bijwerken' : 'Opslaan';
+  }
+}
+
+async function deleteFaq(id) {
+  if (!confirm('FAQ-item verwijderen? Deze actie kan niet ongedaan worden gemaakt.')) return;
+  try {
+    await API.del(`/admin/faq/${id}`);
+    showToast('Item verwijderd', 'success');
+    await loadFaqManager();
+    await loadOverview();
+  } catch (e) {
+    console.warn('Delete error:', e);
+    showToast('Fout bij verwijderen', 'error');
+  }
+}
+
+/* ─── Gaps ────────────────────────────────────────────────── */
+async function loadGaps() {
+  const container = document.getElementById('gaps-container');
+  container.innerHTML = '<div class="loading-state"><div class="spinner"></div><span>Analyseren…</span></div>';
+
+  try {
+    const data = await API.get('/faq/gaps');
+    const gaps = Array.isArray(data) ? data : (data.gaps || data.items || []);
+
+    // Update badge
+    const badge = document.getElementById('nav-gaps-badge');
+    if (gaps.length > 0) {
+      badge.textContent = gaps.length > 9 ? '9+' : gaps.length;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+
+    if (gaps.length === 0) {
+      container.innerHTML = `<div class="empty-state">
+        <div class="empty-state-icon">✅</div>
+        <div class="empty-state-title">Volledige dekking!</div>
+        <div class="empty-state-text">De chatbot beantwoordt alle vragen. Geen hiaten gedetecteerd.</div>
+      </div>`;
+      return;
+    }
+
+    const cards = gaps.map(g => {
+      const question = g.question || g.text || '';
+      const count = g.count || g.frequency || 0;
+      const prio = (g.priority || '').toUpperCase();
+      let badgeHtml = '';
+      if (prio === 'HAUTE' || prio === 'HIGH' || prio === 'HOOG') {
+        badgeHtml = '<span class="badge badge-high">HOOG</span>';
+      } else if (prio === 'MOYENNE' || prio === 'MEDIUM' || prio === 'GEMIDDELD') {
+        badgeHtml = '<span class="badge badge-medium">GEMIDDELD</span>';
+      }
+      return `<div class="gap-card">
+        <div class="gap-card-header">
+          <div class="gap-card-question">${escHtml(question)}</div>
+          ${badgeHtml}
+        </div>
+        <div class="gap-card-footer">
+          <span class="gap-asked">${count} keer gevraagd</span>
+          <button class="btn btn-primary btn-sm" onclick="addGapToFaq(${JSON.stringify(question).replace(/'/g, '&#39;')})">
+            ➕ Toevoegen aan FAQ
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+
+    container.innerHTML = `<div class="gap-grid">${cards}</div>`;
+
+  } catch (e) {
+    console.warn('Gaps load error:', e);
+    container.innerHTML = `<div class="empty-state">
+      <div class="empty-state-icon">⚠️</div>
+      <div class="empty-state-title">Gegevens niet beschikbaar</div>
+      <div class="empty-state-text">Kan onbeantwoorde vragen niet laden. Controleer de API-verbinding.</div>
+    </div>`;
+  }
+}
+
+function addGapToFaq(question) {
+  openCreateModal(question);
+}
+
+/* ─── Utils ───────────────────────────────────────────────── */
+function escHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function escAttr(str) {
+  if (!str) return '';
+  return String(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/* ─── Keyboard shortcuts ──────────────────────────────────── */
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    ['modal-faq', 'modal-view'].forEach(id => {
+      if (document.getElementById(id).classList.contains('open')) closeModal(id);
+    });
+  }
+});
+
+/* ─── Init ────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  loadOverview();
+  // Pre-check gaps badge in background
+  API.get('/faq/gaps').then(data => {
+    const gaps = Array.isArray(data) ? data : (data.gaps || data.items || []);
+    const badge = document.getElementById('nav-gaps-badge');
+    if (gaps.length > 0) {
+      badge.textContent = gaps.length > 9 ? '9+' : gaps.length;
+      badge.style.display = '';
+    }
+  }).catch(() => {});
+});
+</script>
+</body>
+</html>
