@@ -459,6 +459,36 @@ SYNONYM_GROUPS: List[Dict] = [
         ],
     },
 
+    {
+        "canonical": "wachtwoord",
+        "category": "connectivity",
+        "terms": [
+            # NL
+            "wachtwoord", "paswoord", "inloggegevens", "toegangscode",
+            # FR
+            "mot de passe", "code d'accès", "identifiants",
+            # EN
+            "password", "passcode", "credentials", "login",
+            # DE
+            "passwort", "kennwort", "zugangscode",
+        ],
+    },
+
+    {
+        "canonical": "signaal",
+        "category": "connectivity",
+        "terms": [
+            # NL
+            "signaal", "signaalsterkte", "ontvangst", "bereik",
+            # FR
+            "signal", "force du signal", "portée", "réception",
+            # EN
+            "signal", "signal strength", "range", "reception",
+            # DE
+            "signal", "signalstärke", "reichweite", "empfang",
+        ],
+    },
+
     # ── PROBLEMS & STATUS ─────────────────────────────────────────────────────
 
     {

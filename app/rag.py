@@ -220,7 +220,7 @@ def _cached_translation(prompt: str) -> str:
     try:
         resp = anthropic_client.messages.create(
             model=LLM_MODEL,
-            max_tokens=1000,
+            max_tokens=2048,
             temperature=0.2,
             messages=[{"role": "user", "content": prompt}]
         )

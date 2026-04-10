@@ -36,8 +36,10 @@ from .utils import normalize_text, log_error, coerce_string
 
 logger = logging.getLogger(__name__)
 
-# Default FAQ JSONL file path
-DEFAULT_FAQ_JSONL = os.path.join(DATA_DIR, "faq.jsonl")
+# Default FAQ JSONL file path (prefer FAQAI.jsonl with actual data, fallback to faq.jsonl)
+_PRIMARY_FAQ = os.path.join(DATA_DIR, "all", "faq", "FAQAI.jsonl")
+_FALLBACK_FAQ = os.path.join(DATA_DIR, "faq.jsonl")
+DEFAULT_FAQ_JSONL = _PRIMARY_FAQ if os.path.exists(_PRIMARY_FAQ) else _FALLBACK_FAQ
 
 # In-memory FAQ cache
 _FAQ_CACHE: List[Dict[str, Any]] = []
@@ -107,17 +109,20 @@ class FAQJSONLManager:
                             logger.warning(f"Line {line_number}: Entry is not a dict, skipping")
                             continue
 
-                        question = coerce_string(entry.get("question", ""))
-                        answer = coerce_string(entry.get("answer", ""))
+                        question = coerce_string(entry.get("question", "") or entry.get("Vraag", ""))
+                        answer = coerce_string(entry.get("answer", "") or entry.get("Antwoord", ""))
 
                         if not question or not answer:
                             logger.warning(f"Line {line_number}: Missing question or answer, skipping")
                             continue
 
+                        category = coerce_string(entry.get("category", "") or entry.get("Categorie", ""))
+
                         # Normalize entry
                         normalized_entry = {
                             "question": question,
                             "answer": answer,
+                            "category": category,
                             "metadata": entry.get("metadata", {}),
                             "line_number": line_number
                         }

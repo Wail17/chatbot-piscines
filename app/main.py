@@ -806,10 +806,19 @@ def _gpt_fallback_answer(question: str, lang_code: str = "nl") -> Optional[str]:
     if not _openai_client:
         return None
 
+    # Map lang code to language name for the prompt
+    _LANG_NAMES = {
+        "nl": "Dutch", "en": "English", "fr": "French", "de": "German",
+        "es": "Spanish", "it": "Italian", "pt": "Portuguese", "pl": "Polish",
+        "ro": "Romanian", "da": "Danish", "sv": "Swedish", "fi": "Finnish",
+        "tr": "Turkish", "el": "Greek",
+    }
+    lang_name = _LANG_NAMES.get(lang_code, "Dutch")
+
     try:
         prompt = f"""You are a pool equipment support assistant for Beniferro.
 
-Answer this customer question in Dutch:
+Answer this customer question in {lang_name}:
 {question}
 
 Provide helpful, accurate information about pool equipment (Wifipool, salt electrolysis, sensors, pumps, etc).
@@ -820,7 +829,7 @@ Keep the answer clear and concise."""
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
-            max_tokens=500
+            max_tokens=1024
         )
         answer = response.choices[0].message.content
         return answer
@@ -957,11 +966,22 @@ def _ensure_row_embedding(row: dict, embedder: OpenAIEmbeddings) -> Optional[Lis
         return vector
 
 
+_SEMANTIC_CACHE: Dict[str, Tuple[float, Dict[int, Tuple[dict, float]]]] = {}
+_SEMANTIC_CACHE_TTL = 30  # seconds – covers a single request cycle
+
+
 def _semantic_scores(user_q: str) -> Dict[int, Tuple[dict, float]]:
     global _FAQ_EMBED_DISABLED
     results: Dict[int, Tuple[dict, float]] = {}
     if not _FAQ or not user_q or _FAQ_EMBED_DISABLED:
         return results
+
+    # Per-query short-lived cache to avoid recomputing within the same request
+    cache_key = user_q.strip().lower()
+    cached = _SEMANTIC_CACHE.get(cache_key)
+    if cached and (time.time() - cached[0]) < _SEMANTIC_CACHE_TTL:
+        return cached[1]
+
     try:
         embedder = _faq_embedder()
     except Exception:
@@ -984,6 +1004,15 @@ def _semantic_scores(user_q: str) -> Dict[int, Tuple[dict, float]]:
         if score <= 0.0:
             continue
         results[id(row)] = (row, score)
+
+    # Cache results and evict old entries
+    now = time.time()
+    _SEMANTIC_CACHE[cache_key] = (now, results)
+    if len(_SEMANTIC_CACHE) > 50:
+        stale = [k for k, (t, _) in _SEMANTIC_CACHE.items() if now - t > _SEMANTIC_CACHE_TTL]
+        for k in stale:
+            _SEMANTIC_CACHE.pop(k, None)
+
     return results
 
 
@@ -1626,9 +1655,15 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
         # Try GPT fallback for empty/short FAQ answers
         gpt_answer = _gpt_fallback_answer(user_q or question_ref or "", lang_code)
         if gpt_answer:
-            ai_note = "\n\n*Deze informatie is gegenereerd door AI. Voor specifieke vragen kunt u contact opnemen met support@beniferro.eu.*"
+            _AI_NOTES_INNER = {
+                "nl": "\n\n*Deze informatie is gegenereerd door AI. Voor specifieke vragen kunt u contact opnemen met support@beniferro.eu.*",
+                "fr": "\n\n*Ces informations sont générées par IA. Pour des questions spécifiques, veuillez contacter support@beniferro.eu.*",
+                "en": "\n\n*This information is AI-generated. For specific questions, please contact support@beniferro.eu.*",
+                "de": "\n\n*Diese Informationen wurden von KI generiert. Bei spezifischen Fragen wenden Sie sich bitte an support@beniferro.eu.*",
+            }
+            ai_note = _AI_NOTES_INNER.get(lang_code, _AI_NOTES_INNER["nl"])
             response = {
-                "answer": _ensure_language(gpt_answer + ai_note, lang_code),
+                "answer": gpt_answer + ai_note,
                 "citations": _citations_for_row(row),
                 "source": "ai_fallback"
             }
@@ -2537,10 +2572,23 @@ def chat(req: ChatRequest, request: Request):
             }
             return _add_suggestions_to_response(response, q, lang_code, None)
 
+    # ----- Pre-translate non-Dutch queries for better matching -----
+    translated_query = None
+    if lang_code and lang_code not in {"", "nl"}:
+        try:
+            translated_query = translate_for_matching(q, lang_code)
+        except Exception:
+            translated_query = None
+        if translated_query and _normalize(translated_query) == _normalize(q):
+            translated_query = None  # no actual translation happened
+
     # ----- 1b) Direct FAQ answer (high-confidence keyword match, no LLM) -----
     if _DIRECT_ANSWER_AVAILABLE and q and not clarify_ref:
         try:
+            # Try original query first, then translated query
             direct_result = get_direct_answer_with_suggestions(q)
+            if direct_result is None and translated_query:
+                direct_result = get_direct_answer_with_suggestions(translated_query)
             if direct_result is not None:
                 response = {
                     "answer": _ensure_language(direct_result["answer"], lang_code),
@@ -2557,19 +2605,12 @@ def chat(req: ChatRequest, request: Request):
 
     # ----- 2) lookup direct dans l'index
     matched_row, clarify_rows = _match_row_with_clarify(q)
-    translated_query = None
-    if not matched_row and not clarify_rows and lang_code not in {"", "nl"}:
-        try:
-            translated_query = translate_for_matching(q, lang_code)
-        except Exception:
-            translated_query = None
-        if translated_query:
-            if _normalize(translated_query) != _normalize(q):
-                alt_row, alt_clarify = _match_row_with_clarify(translated_query)
-                if alt_clarify:
-                    clarify_rows = alt_clarify
-                elif alt_row:
-                    matched_row = alt_row
+    if not matched_row and not clarify_rows and translated_query:
+        alt_row, alt_clarify = _match_row_with_clarify(translated_query)
+        if alt_clarify:
+            clarify_rows = alt_clarify
+        elif alt_row:
+            matched_row = alt_row
     if clarify_rows:
         _set_pending(
             client_id,
@@ -2597,11 +2638,17 @@ def chat(req: ChatRequest, request: Request):
     track_no_answer(q, language=lang_code)
     gpt_answer = _gpt_fallback_answer(q, lang_code)
     if gpt_answer:
-        # Add a note that the answer is AI-generated
-        ai_note = "\n\n*Deze informatie is gegenereerd door AI. Voor specifieke vragen kunt u contact opnemen met support@beniferro.eu.*"
+        # Add a note that the answer is AI-generated (in user's language)
+        _AI_NOTES = {
+            "nl": "\n\n*Deze informatie is gegenereerd door AI. Voor specifieke vragen kunt u contact opnemen met support@beniferro.eu.*",
+            "fr": "\n\n*Ces informations sont générées par IA. Pour des questions spécifiques, veuillez contacter support@beniferro.eu.*",
+            "en": "\n\n*This information is AI-generated. For specific questions, please contact support@beniferro.eu.*",
+            "de": "\n\n*Diese Informationen wurden von KI generiert. Bei spezifischen Fragen wenden Sie sich bitte an support@beniferro.eu.*",
+        }
+        ai_note = _AI_NOTES.get(lang_code, _AI_NOTES["nl"])
         full_answer = gpt_answer + ai_note
         response = {
-            "answer": _ensure_language(full_answer, lang_code),
+            "answer": full_answer,
             "citations": [],
             "source": "ai_fallback"
         }
