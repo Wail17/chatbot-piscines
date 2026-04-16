@@ -86,6 +86,14 @@ REPHRASING_CASES = [
     ("Meine Salzelectrolyse start nicht", 50, "DE salt electrolyser not starting"),
     ("How come the Electrolyser is not on", 50, "EN electrolyser not on"),
     ("pourquoi mon electrolyseur ne se met pas en route?", 50, "FR electrolyser not starting"),
+
+    # pH deviation / fluctuation → row ~29 (owner's cel C29)
+    ("De pH op mijn toestel wijkt sterk af en of varieert heel hard", 29, "NL exact C29 phrasing"),
+    ("Mijn pH varieert heel hard", 29, "NL pH varies synonym"),
+
+    # Manual activation → row ~103 (owner's cel C103)
+    ("Hoe schakel ik mijn wifitpool toestel manueel aan", 103, "NL exact C103 phrasing"),
+    ("Hoe moet ik mijn wifipoolapparaat op manueel zetten?", 103, "NL 'op manueel zetten' variation"),
 ]
 
 
