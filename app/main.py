@@ -1530,6 +1530,32 @@ def _get_similar_questions(
 _PENDING_BY_CLIENT: Dict[str, Dict[str, Any]] = {}
 _PENDING_TTL = 180.0  # seconds
 
+# Short rolling conversation history per client for expert_answer context.
+# { client_id: [{"role": "user"|"assistant", "content": str, "ts": epoch}, ...] }
+_HISTORY_BY_CLIENT: Dict[str, List[Dict[str, Any]]] = {}
+_HISTORY_MAX_TURNS = 6   # 3 user + 3 assistant
+_HISTORY_TTL = 600.0     # 10 min
+
+
+def _get_history(client_id: str) -> List[Dict[str, str]]:
+    import time as _t
+    now = _t.time()
+    items = _HISTORY_BY_CLIENT.get(client_id) or []
+    fresh = [h for h in items if (now - h.get("ts", 0)) < _HISTORY_TTL]
+    if len(fresh) != len(items):
+        _HISTORY_BY_CLIENT[client_id] = fresh
+    return [{"role": h["role"], "content": h["content"]} for h in fresh]
+
+
+def _append_history(client_id: str, role: str, content: str) -> None:
+    import time as _t
+    if not content or not content.strip():
+        return
+    lst = _HISTORY_BY_CLIENT.setdefault(client_id, [])
+    lst.append({"role": role, "content": content.strip(), "ts": _t.time()})
+    if len(lst) > _HISTORY_MAX_TURNS:
+        del lst[: len(lst) - _HISTORY_MAX_TURNS]
+
 def _client_id_from_request(req: Request) -> str:
     xf = req.headers.get("x-forwarded-for")
     if xf:
@@ -2548,7 +2574,9 @@ def chat(req: ChatRequest, request: Request):
         raise HTTPException(status_code=429, detail="Te veel verzoeken. Wacht even en probeer opnieuw.")
 
     # ── Query preprocessor: greetings / thanks / out-of-scope ───────────────
-    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref:
+    # Skip if the user has an active conversation — short replies ("1", "oui",
+    # "gen 2") are meaningful follow-ups, not empty/out-of-scope queries.
+    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref and not _get_history(client_id):
         try:
             processed = preprocess_query(q)
             if processed.immediate_response is not None:
@@ -2575,8 +2603,8 @@ def chat(req: ChatRequest, request: Request):
     if q:
         track_question(q, language=lang_code, source="api")
 
-    # ── Response cache (only for non-clarify requests) ───────────────────────
-    if q and not clarify_ref:
+    # ── Response cache (only for non-clarify requests AND no conversation history) ───
+    if q and not clarify_ref and not _get_history(client_id):
         cache_key = normalize_for_cache(q)
         cached = cache_get(cache_key)
         if cached is not None:
@@ -2589,7 +2617,8 @@ def chat(req: ChatRequest, request: Request):
     # in the user's language. Falls back to legacy cascade on any error.
     if q and not clarify_ref and _FAQ:
         try:
-            ex = expert_answer(q, lang_code, _FAQ)
+            history = _get_history(client_id)
+            ex = expert_answer(q, lang_code, _FAQ, history=history)
             ex_answer = (ex.get("answer") or "").strip()
             if ex_answer and not ex.get("error"):
                 primary_source = ex.get("primary_source")
@@ -2619,7 +2648,10 @@ def chat(req: ChatRequest, request: Request):
                 if ex.get("ambiguous") and alt_qs:
                     response["clarify"] = {"ref": q, "options": alt_qs, "tips": []}
                 result = _add_suggestions_to_response(response, q, lang_code, matched_row)
-                cache_set(normalize_for_cache(q), result)
+                _append_history(client_id, "user", q)
+                _append_history(client_id, "assistant", ex_answer)
+                if not history:
+                    cache_set(normalize_for_cache(q), result)
                 return result
             else:
                 logger.info(f"expert_answer returned empty/error, falling back: {ex.get('error')}")

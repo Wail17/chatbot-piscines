@@ -256,6 +256,9 @@ _EXPERT_SYSTEM_BASE = (
     "- If the user's question is genuinely not covered by the FAQ, say so clearly "
     "instead of guessing.\n"
     "- Combine information from multiple FAQ rows when the question is hybrid.\n"
+    "- Use the prior conversation turns as context. If the user gives a short reply "
+    "(e.g. 'gen 2', 'oui', 'the first one'), interpret it as an answer to YOUR previous "
+    "question and continue the same topic — do NOT treat it as a new independent query.\n"
     "- When the user asks in French/English/German, translate your answer to that "
     "language naturally (the FAQ itself is mostly Dutch).\n"
     "- Preserve URLs, product names (Wifipool, Beniferro, Pool Twin, Pool Duo), and "
@@ -274,6 +277,24 @@ _EXPERT_SYSTEM_BASE = (
 )
 
 _LANG_NAMES = {"nl": "Dutch", "fr": "French", "en": "English", "de": "German"}
+
+
+def _build_expert_messages(question: str, history: Optional[List[Dict[str, str]]]) -> List[Dict[str, str]]:
+    """Build the messages list for Anthropic, including up to the last 3 turns of history.
+
+    history format: [{"role": "user"|"assistant", "content": "..."}, ...] in chronological order.
+    """
+    msgs: List[Dict[str, str]] = []
+    if history:
+        trimmed = [h for h in history if h.get("role") in ("user", "assistant") and (h.get("content") or "").strip()]
+        trimmed = trimmed[-6:]
+        for h in trimmed:
+            content = h["content"].strip()
+            if h["role"] == "assistant" and len(content) > 600:
+                content = content[:600] + "..."
+            msgs.append({"role": h["role"], "content": content})
+    msgs.append({"role": "user", "content": question})
+    return msgs
 
 
 def _build_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
@@ -322,6 +343,7 @@ def expert_answer(
     question: str,
     lang_code: str,
     faq_entries: List[Dict[str, Any]],
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     """Generate a natural expert answer using Claude Haiku with the FAQ as cached context.
 
@@ -365,7 +387,7 @@ def expert_answer(
                     "cache_control": {"type": "ephemeral"},
                 },
             ],
-            messages=[{"role": "user", "content": f"User question: {question}"}],
+            messages=_build_expert_messages(question, history),
         )
         raw = resp.content[0].text if resp.content else ""
     except Exception as e:

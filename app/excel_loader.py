@@ -371,8 +371,27 @@ def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, 
         excel_row += 1
         vraag = _cell(row, "vraag")
         antwoord = _cell(row, "antwoord")
-        if not vraag or not antwoord:
+        # If NL answer is empty, fall back to EN/FR/DE (some rows are only
+        # documented in translated columns, e.g. row 132 Algemeen).
+        if not antwoord:
+            for fallback_key in ("en_answer", "fr_reponse", "de_antwort"):
+                alt = _cell(row, fallback_key)
+                if alt:
+                    antwoord = alt
+                    break
+        if not antwoord:
             continue
+        # Some rows (e.g. 27 "Wifipool Gen 1 reset", 28 "Wifipool gen 2 Reset")
+        # have no explicit question — only a category/topic in column B. Fall
+        # back to that topic, then to any translated question.
+        if not vraag:
+            for fallback_key in ("category", "en_question", "fr_question", "de_frage"):
+                alt = _cell(row, fallback_key)
+                if alt:
+                    vraag = alt
+                    break
+            if not vraag:
+                continue
 
         alt_raw = _cell(row, "alternatieve")
         alt_list = _split_alt_questions(alt_raw)
