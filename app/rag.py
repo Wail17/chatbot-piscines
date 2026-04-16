@@ -232,6 +232,66 @@ def _cached_translation(prompt: str) -> str:
         return ""
 
 
+@lru_cache(maxsize=1024)
+def polish_faq_answer(text: str, lang_code: str = "nl") -> str:
+    """Light LLM pass to fix obvious typos / missing letters in a pre-written FAQ answer.
+
+    The FAQ source Excel sometimes has minor defects (e.g. 'oer' instead of 'Voer').
+    This function fixes those defects WITHOUT rewriting or expanding the content.
+    Cached per (text, lang) so each FAQ row is polished once.
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    if not stripped:
+        return text
+
+    first_char = stripped[0]
+    needs_polish = first_char.islower() or first_char in ",;:.)"
+    if not needs_polish:
+        # Also polish if we detect a word that's likely truncated (e.g. "oer" at start).
+        first_word = stripped.split(None, 1)[0].rstrip(",.;:!?")
+        if len(first_word) >= 2 and first_word[0].islower():
+            needs_polish = True
+
+    if not needs_polish:
+        return text
+
+    lang_name = SUPPORTED_LANGUAGES.get(normalize_language_code(lang_code) or "nl", "Dutch")
+    prompt = (
+        f"The following {lang_name} FAQ answer may have minor typos or a missing first "
+        f"letter at the very start (e.g. 'oer' instead of 'Voer'). Fix ONLY obvious "
+        f"typos, missing letters, or capitalization. Do NOT rewrite, rephrase, translate, "
+        f"shorten, or expand the content. Keep line breaks, product names, URLs, and "
+        f"technical terms exactly as they appear. Reply with the corrected text only.\n\n"
+        f"Answer:\n{text}"
+    )
+
+    if anthropic_client is not None:
+        try:
+            fixed = _cached_translation(prompt)
+            if fixed and len(fixed) >= max(10, int(len(text) * 0.5)):
+                return fixed
+        except Exception as e:
+            log_error(e, "Answer polish (Anthropic) failed", text_preview=text[:50])
+
+    if openai_client is not None:
+        try:
+            resp = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.0,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            fixed = (resp.choices[0].message.content or "").strip()
+            if fixed and len(fixed) >= max(10, int(len(text) * 0.5)):
+                return fixed
+        except Exception as e:
+            log_error(e, "Answer polish (OpenAI) failed", text_preview=text[:50])
+
+    return text
+
+
 def translate_answer(text: str, target_code: str) -> str:
     """
     Translate answer text to the target language.

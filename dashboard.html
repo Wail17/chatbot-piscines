@@ -1041,10 +1041,16 @@
             <h2>Overzicht</h2>
             <p>Samenvatting van de chatbot prestaties van de afgelopen 7 dagen</p>
           </div>
-          <button id="btn-reload-excel" onclick="reloadFromExcel()" title="Laad AI 2.0.xlsx opnieuw in de kennisbank"
-            style="padding:10px 18px;background:#4f46e5;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
-            🔄 <span>Excel opnieuw laden</span>
-          </button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button id="btn-reload-excel" onclick="reloadFromExcel(false)" title="Snel: laad Excel zonder LLM-opkuis"
+              style="padding:10px 18px;background:#4f46e5;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
+              🔄 <span>Excel opnieuw laden</span>
+            </button>
+            <button id="btn-reload-excel-polish" onclick="reloadFromExcel(true)" title="Traag: laad Excel en kuis typfouten en grammatica op met AI"
+              style="padding:10px 18px;background:#059669;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
+              ✨ <span>Excel + AI opkuis</span>
+            </button>
+          </div>
         </div>
 
         <div class="stat-grid" id="overview-stats">
@@ -1317,25 +1323,31 @@ function showSection(name) {
 function refreshCurrent() { showSection(currentSection); }
 
 /* ─── Reload from Excel ───────────────────────────────────── */
-async function reloadFromExcel() {
-  const btn = document.getElementById('btn-reload-excel');
+async function reloadFromExcel(polish = false) {
+  const btnId = polish ? 'btn-reload-excel-polish' : 'btn-reload-excel';
+  const btn = document.getElementById(btnId);
+  const otherBtn = document.getElementById(polish ? 'btn-reload-excel' : 'btn-reload-excel-polish');
   if (!btn) return;
   const label = btn.querySelector('span');
   const originalLabel = label ? label.textContent : '';
   btn.disabled = true;
+  if (otherBtn) otherBtn.disabled = true;
   btn.style.opacity = '0.7';
-  if (label) label.textContent = 'Bezig met laden…';
+  if (label) label.textContent = polish ? 'AI kuist antwoorden op…' : 'Bezig met laden…';
   try {
-    const resp = await fetch(`${API_BASE}/admin/reload-excel`, { method: 'POST' });
+    const url = `${API_BASE}/admin/reload-excel${polish ? '?polish=true' : ''}`;
+    const resp = await fetch(url, { method: 'POST' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-    showToast(`Excel geladen: ${data.entries} items, ${data.images} afbeeldingen`, 'success');
+    const extra = data.polished ? `, ${data.polished} antwoorden opgekuist` : '';
+    showToast(`Excel geladen: ${data.entries} items, ${data.images} afbeeldingen${extra}`, 'success');
     loadOverview();
   } catch (err) {
     console.error(err);
     showToast('Fout bij het laden van Excel', 'error');
   } finally {
     btn.disabled = false;
+    if (otherBtn) otherBtn.disabled = false;
     btn.style.opacity = '';
     if (label) label.textContent = originalLabel;
   }

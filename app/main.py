@@ -23,6 +23,7 @@ from .rag import (
     translate_answer,
     translate_for_matching,
     get_top_suggestions,
+    polish_faq_answer,
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
@@ -1771,10 +1772,11 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
     # (skip the LLM translation roundtrip entirely)
     pretrans = _get_answer_in_language(row, lang_code)
     if pretrans:
-        direct = pretrans
+        direct = polish_faq_answer(pretrans, lang_code)
         _skip_translation = True
     else:
-        direct = (row.get("answer") or row.get("antwoord") or "").strip()
+        raw = (row.get("answer") or row.get("antwoord") or "").strip()
+        direct = polish_faq_answer(raw, "nl")
         _skip_translation = False
 
     # Check if FAQ answer is empty or too short/unhelpful - use GPT fallback
@@ -2730,7 +2732,11 @@ def chat(req: ChatRequest, request: Request):
             if direct_result is not None:
                 matched_row = direct_result.get("row") or {}
                 pre_translated = _get_answer_in_language(matched_row, lang_code)
-                answer_text = pre_translated or _ensure_language(direct_result["answer"], lang_code)
+                if pre_translated:
+                    answer_text = polish_faq_answer(pre_translated, lang_code)
+                else:
+                    polished_nl = polish_faq_answer(direct_result["answer"], "nl")
+                    answer_text = _ensure_language(polished_nl, lang_code)
                 response = {
                     "answer": answer_text,
                     "citations": direct_result.get("citations", []),
@@ -2887,11 +2893,16 @@ app.mount("/faq_images", StaticFiles(directory=_FAQ_IMAGES_DIR), name="faq_image
 # Admin: reload from Excel (AI 2.0.xlsx → JSONL + images)
 # ---------------------------------------------------------------------
 @app.post("/admin/reload-excel")
-async def reload_from_excel_endpoint():
-    """Rebuild FAQAI.jsonl + faq_images/ from AI 2.0.xlsx and reload the in-memory FAQ."""
+async def reload_from_excel_endpoint(polish: bool = False):
+    """Rebuild FAQAI.jsonl + faq_images/ from AI 2.0.xlsx and reload the in-memory FAQ.
+
+    Query params:
+      - polish=true → run an LLM pass to fix typos/grammar in every answer
+        (slower, but produces clean user-facing responses).
+    """
     try:
         from .excel_loader import reload_from_excel
-        summary = reload_from_excel()
+        summary = reload_from_excel(polish=polish)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -2904,5 +2915,6 @@ async def reload_from_excel_endpoint():
         "entries": summary["entries"],
         "images": summary["images"],
         "synonym_groups": summary["synonym_groups"],
+        "polished": summary.get("polished", 0),
         "faq_loaded": count,
     }

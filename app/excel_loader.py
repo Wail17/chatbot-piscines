@@ -126,6 +126,45 @@ def _clean_multiline(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
 
+# Known first-word typos in the source Excel (missing first letter, etc.)
+# Maps exact first word (case-sensitive) → correct first word.
+FIRST_WORD_FIXES: Dict[str, str] = {
+    "oer": "Voer",
+}
+
+# First words that ARE valid even when lowercase (technical terms, abbreviations).
+LOWERCASE_ALLOWED_FIRST_WORDS = {"ph", "mv", "ms/cm", "rx", "orp"}
+
+
+def _repair_answer(text: str) -> str:
+    """Fix obvious defects in a FAQ answer pulled from the owner's Excel.
+
+    Applies deterministic repairs only:
+      1) Known first-word typos (e.g. 'oer' → 'Voer')
+      2) Auto-capitalize the first letter when lowercase and the word isn't a
+         technical abbreviation (pH, mV, RX, …) or a URL.
+    Does NOT rewrite, rephrase, or translate.
+    """
+    if not text:
+        return text
+    stripped = text.lstrip()
+    if not stripped:
+        return text
+    leading_ws = text[: len(text) - len(stripped)]
+
+    first_word = stripped.split(None, 1)[0]
+    remainder = stripped[len(first_word):]
+
+    if first_word in FIRST_WORD_FIXES:
+        return leading_ws + FIRST_WORD_FIXES[first_word] + remainder
+
+    if first_word[:1].islower() and first_word.lower() not in LOWERCASE_ALLOWED_FIRST_WORDS:
+        if not first_word.startswith(("http://", "https://", "www.")):
+            return leading_ws + first_word[0].upper() + first_word[1:] + remainder
+
+    return text
+
+
 def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
     """
     Parse xl/drawings/*.xml to map each drawing's embed rId -> row number.
@@ -350,7 +389,7 @@ def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, 
         entry: Dict[str, Any] = {
             "Categorie": _cell(row, "category"),
             "Vraag": vraag_clean,
-            "Antwoord": _clean_multiline(antwoord),
+            "Antwoord": _repair_answer(_clean_multiline(antwoord)),
             "alt_questions": alt_list,
             "tags": _extract_tags(row),
             "excel_row": excel_row,
@@ -369,26 +408,147 @@ def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, 
         if de_q:
             entry["DEFrage"] = de_q
         if de_a:
-            entry["DEAntwort"] = _clean_multiline(de_a)
+            entry["DEAntwort"] = _repair_answer(_clean_multiline(de_a))
 
         fr_q = _cell(row, "fr_question")
         fr_a = _cell(row, "fr_reponse")
         if fr_q:
             entry["FRQuestion"] = fr_q
         if fr_a:
-            entry["FRReponse"] = _clean_multiline(fr_a)
+            entry["FRReponse"] = _repair_answer(_clean_multiline(fr_a))
 
         en_q = _cell(row, "en_question")
         en_a = _cell(row, "en_answer")
         if en_q:
             entry["ENQuestion"] = en_q
         if en_a:
-            entry["ENAnswer"] = _clean_multiline(en_a)
+            entry["ENAnswer"] = _repair_answer(_clean_multiline(en_a))
 
         entries.append(entry)
 
     logger.info("Built %d entries from Excel", len(entries))
     return entries
+
+
+def _llm_polish(text: str, lang_name: str) -> Optional[str]:
+    """Send one answer through an LLM to clean typos, missing letters, grammar.
+
+    Priorities, in order: Anthropic (Haiku), OpenAI (gpt-4o-mini).
+    Returns cleaned text, or None if no LLM is available / call failed.
+    The LLM is instructed to fix ONLY defects — never rewrite or add content.
+    """
+    if not text or not text.strip():
+        return None
+
+    prompt = (
+        f"You are a careful proofreader for a {lang_name} FAQ knowledge base. "
+        f"Fix defects in the answer below:\n"
+        f"- missing letters at the start of words (e.g. 'oer' → 'Voer')\n"
+        f"- obvious typos and misspellings (e.g. 'collecotor' → 'collector', 'overbang' → 'overgang')\n"
+        f"- capitalization (sentences must start with a capital letter)\n"
+        f"- missing punctuation at the end of sentences\n"
+        f"- broken spacing\n\n"
+        f"STRICT RULES — never violate:\n"
+        f"- Do NOT rewrite, rephrase, translate, shorten, or expand.\n"
+        f"- Keep the content, facts, order, and meaning identical.\n"
+        f"- Keep line breaks, bullet points, numbers, URLs, product names, and technical terms exactly as written.\n"
+        f"- If the text is already correct, return it UNCHANGED.\n"
+        f"- Reply with ONLY the corrected text — no preamble, no explanation, no quotes.\n\n"
+        f"Answer:\n{text}"
+    )
+
+    try:
+        from .rag import anthropic_client, openai_client
+        from .config import LLM_MODEL
+    except Exception:
+        return None
+
+    if anthropic_client is not None:
+        try:
+            resp = anthropic_client.messages.create(
+                model=LLM_MODEL,
+                max_tokens=2048,
+                temperature=0.0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            out = (resp.content[0].text or "").strip()
+            if out and len(out) >= max(10, int(len(text) * 0.5)):
+                return out
+        except Exception as e:
+            logger.debug("Anthropic polish failed: %s", e)
+
+    if openai_client is not None:
+        try:
+            resp = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.0,
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            out = (resp.choices[0].message.content or "").strip()
+            if out and len(out) >= max(10, int(len(text) * 0.5)):
+                return out
+        except Exception as e:
+            logger.debug("OpenAI polish failed: %s", e)
+
+    return None
+
+
+def polish_entries_with_llm(entries: List[Dict[str, Any]], max_workers: int = 8) -> int:
+    """In-place LLM polish pass over every answer field in every entry.
+
+    Polished text overwrites the original only when the LLM returns something
+    non-empty and not trivially shorter. Returns the count of rewrites.
+    Skips silently when no LLM is available so reloads still succeed offline.
+
+    Runs in parallel (threads) since Anthropic API calls are I/O bound.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    field_lang = {
+        "Antwoord": "Dutch",
+        "ENAnswer": "English",
+        "FRReponse": "French",
+        "DEAntwort": "German",
+    }
+
+    jobs = []
+    for entry in entries:
+        for field, lang_name in field_lang.items():
+            orig = entry.get(field)
+            if not orig or not isinstance(orig, str):
+                continue
+            jobs.append((entry, field, lang_name, orig))
+
+    total = len(jobs)
+    logger.info("LLM polish: %d fields to process (workers=%d)", total, max_workers)
+    if total == 0:
+        return 0
+
+    updated = 0
+    done = 0
+
+    def work(item):
+        entry, field, lang_name, orig = item
+        polished = _llm_polish(orig, lang_name)
+        return entry, field, orig, polished
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(work, j) for j in jobs]
+        for fut in as_completed(futures):
+            done += 1
+            try:
+                entry, field, orig, polished = fut.result()
+            except Exception as e:
+                logger.debug("polish worker error: %s", e)
+                continue
+            if polished and polished.strip() and polished.strip() != orig.strip():
+                entry[field] = polished
+                updated += 1
+            if done % 50 == 0 or done == total:
+                logger.info("LLM polish progress: %d/%d (%d rewrites so far)", done, total, updated)
+
+    return updated
 
 
 def write_jsonl(entries: List[Dict[str, Any]], out_path: Path) -> None:
@@ -413,13 +573,27 @@ def reload_from_excel(
     excel_path: Path = EXCEL_PATH,
     jsonl_out: Path = JSONL_OUT,
     images_dir: Path = IMAGES_DIR,
+    polish: bool = False,
 ) -> Dict[str, int]:
-    """Full reload pipeline. Returns summary dict."""
+    """Full reload pipeline. Returns summary dict.
+
+    When `polish=True`, every answer is sent through an LLM (Anthropic or
+    OpenAI) to fix typos, capitalization, missing letters, and grammar —
+    without rewriting the content. This adds ~1 LLM call per answer (runs
+    once per reload, then served from JSONL).
+    """
     if not excel_path.exists():
         raise FileNotFoundError(f"Excel not found: {excel_path}")
 
     image_map = extract_images(excel_path, images_dir)
     entries = build_entries(excel_path, image_map)
+
+    polished_count = 0
+    if polish:
+        logger.info("Running LLM polish pass over %d entries...", len(entries))
+        polished_count = polish_entries_with_llm(entries)
+        logger.info("LLM polish done: %d answers rewritten", polished_count)
+
     write_jsonl(entries, jsonl_out)
 
     syn_groups = load_synonym_sheets(excel_path)
@@ -430,6 +604,7 @@ def reload_from_excel(
         "entries": len(entries),
         "images": len(image_map),
         "synonym_groups": len(syn_groups),
+        "polished": polished_count,
     }
 
 
@@ -438,6 +613,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Reload FAQ from AI 2.0.xlsx")
     parser.add_argument("--reload", action="store_true", help="Perform full reload")
+    parser.add_argument("--polish", action="store_true",
+                        help="Run an LLM polish pass to fix typos/grammar in every answer")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -446,7 +623,14 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    summary = reload_from_excel()
-    print(f"Entries: {summary['entries']}")
-    print(f"Images:  {summary['images']}")
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
+
+    summary = reload_from_excel(polish=args.polish)
+    print(f"Entries:  {summary['entries']}")
+    print(f"Images:   {summary['images']}")
     print(f"Synonym groups (Excel): {summary['synonym_groups']}")
+    print(f"Polished: {summary.get('polished', 0)}")
