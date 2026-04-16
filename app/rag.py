@@ -232,6 +232,161 @@ def _cached_translation(prompt: str) -> str:
         return ""
 
 
+# ============================================================================
+# EXPERT MODE — Claude Haiku as Wifipool/Beniferro expert
+# Reads the full FAQ as cached context and generates human-like answers
+# ============================================================================
+
+_EXPERT_FAQ_CONTEXT: Optional[str] = None
+_EXPERT_FAQ_CACHE_SIG: Optional[tuple] = None
+_EXPERT_MODEL = "claude-haiku-4-5-20251001"
+
+_EXPERT_SYSTEM_BASE = (
+    "You are the Wifipool/Beniferro pool expert assistant. Beniferro is a Belgian "
+    "company that makes smart pool controllers (Wifipool Gen 1/Gen 2/Gen 3), salt "
+    "electrolysers, pH/ORP dosing systems, frequency regulators, and pool accessories.\n\n"
+    "You will receive the FAQ knowledge base below. Answer the user's question as a "
+    "knowledgeable human expert would — conversational, confident, clear, and concise.\n\n"
+    "STRICT RULES:\n"
+    "- Use ONLY information from the FAQ below. Never invent procedures, error codes, "
+    "part numbers, serial numbers, URLs, or contact details.\n"
+    "- If the question is outside the pool / Beniferro / Wifipool domain (weather, "
+    "general coding, politics, …), politely say it is outside your scope and set "
+    "out_of_scope=true.\n"
+    "- If the user's question is genuinely not covered by the FAQ, say so clearly "
+    "instead of guessing.\n"
+    "- Combine information from multiple FAQ rows when the question is hybrid.\n"
+    "- When the user asks in French/English/German, translate your answer to that "
+    "language naturally (the FAQ itself is mostly Dutch).\n"
+    "- Preserve URLs, product names (Wifipool, Beniferro, Pool Twin, Pool Duo), and "
+    "technical terms exactly as they appear in the FAQ.\n"
+    "- Cite which FAQ row(s) you relied on in the JSON output.\n\n"
+    "OUTPUT — strict JSON, no preamble, no markdown code fence:\n"
+    "{\n"
+    '  "answer": "your natural answer in the user language",\n'
+    '  "sources": [row_int, ...],\n'
+    '  "primary_source": row_int or null,\n'
+    '  "confidence": 0.0 to 1.0,\n'
+    '  "out_of_scope": true|false,\n'
+    '  "ambiguous": true|false,\n'
+    '  "alternative_questions": ["..", ".."] (only when ambiguous)\n'
+    "}"
+)
+
+_LANG_NAMES = {"nl": "Dutch", "fr": "French", "en": "English", "de": "German"}
+
+
+def _build_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for e in entries:
+        row = e.get("excel_row")
+        q = (e.get("Vraag") or e.get("question") or "").strip()
+        a = (e.get("Antwoord") or e.get("answer") or "").strip()
+        if not q or not a:
+            continue
+        row_tag = f"[row {row}]" if row else "[row ?]"
+        parts.append(f"{row_tag} Q: {q}\nA: {a}")
+    return "\n\n".join(parts)
+
+
+def _get_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
+    global _EXPERT_FAQ_CONTEXT, _EXPERT_FAQ_CACHE_SIG
+    sig = (len(entries), tuple(e.get("excel_row") for e in entries[:5]))
+    if _EXPERT_FAQ_CONTEXT is None or _EXPERT_FAQ_CACHE_SIG != sig:
+        _EXPERT_FAQ_CONTEXT = _build_expert_faq_context(entries)
+        _EXPERT_FAQ_CACHE_SIG = sig
+        logger.info(f"Built expert FAQ context: {len(entries)} entries, {len(_EXPERT_FAQ_CONTEXT)} chars")
+    return _EXPERT_FAQ_CONTEXT
+
+
+def _extract_json(raw: str) -> Optional[Dict[str, Any]]:
+    import json as _json
+    s = (raw or "").strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```(?:json)?\s*\n?", "", s)
+        s = re.sub(r"\n?```\s*$", "", s).strip()
+    try:
+        return _json.loads(s)
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", s, re.DOTALL)
+    if match:
+        try:
+            return _json.loads(match.group(0))
+        except Exception:
+            return None
+    return None
+
+
+def expert_answer(
+    question: str,
+    lang_code: str,
+    faq_entries: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Generate a natural expert answer using Claude Haiku with the FAQ as cached context.
+
+    Returns a dict with: answer, sources, primary_source, confidence, out_of_scope,
+    ambiguous, alternative_questions, raw (debug), error (if failure).
+    """
+    empty = {
+        "answer": "",
+        "sources": [],
+        "primary_source": None,
+        "confidence": 0.0,
+        "out_of_scope": False,
+        "ambiguous": False,
+        "alternative_questions": [],
+    }
+    if anthropic_client is None:
+        return {**empty, "error": "anthropic_client_unavailable"}
+    if not question or not question.strip():
+        return {**empty, "error": "empty_question"}
+
+    code = (lang_code or "nl").lower()
+    target_lang = _LANG_NAMES.get(code, "Dutch")
+    context = _get_expert_faq_context(faq_entries)
+    if not context:
+        return {**empty, "error": "empty_faq_context"}
+
+    system_prompt = _EXPERT_SYSTEM_BASE + (
+        f"\n\nThe user is writing in {target_lang}. Respond in {target_lang}."
+    )
+
+    try:
+        resp = anthropic_client.messages.create(
+            model=_EXPERT_MODEL,
+            max_tokens=1200,
+            temperature=0.2,
+            system=[
+                {"type": "text", "text": system_prompt},
+                {
+                    "type": "text",
+                    "text": "FAQ KNOWLEDGE BASE (Dutch master, translate answer to user language):\n\n" + context,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            messages=[{"role": "user", "content": f"User question: {question}"}],
+        )
+        raw = resp.content[0].text if resp.content else ""
+    except Exception as e:
+        log_error(e, "expert_answer API call failed", question=question[:80])
+        return {**empty, "error": f"api_error: {e}"}
+
+    data = _extract_json(raw)
+    if not data:
+        return {**empty, "error": "json_parse_failed", "raw": raw[:400]}
+
+    return {
+        "answer": (data.get("answer") or "").strip(),
+        "sources": data.get("sources") or [],
+        "primary_source": data.get("primary_source"),
+        "confidence": float(data.get("confidence") or 0.0),
+        "out_of_scope": bool(data.get("out_of_scope")),
+        "ambiguous": bool(data.get("ambiguous")),
+        "alternative_questions": data.get("alternative_questions") or [],
+    }
+
+
 @lru_cache(maxsize=1024)
 def polish_faq_answer(text: str, lang_code: str = "nl") -> str:
     """Light LLM pass to fix obvious typos / missing letters in a pre-written FAQ answer.

@@ -24,6 +24,7 @@ from .rag import (
     translate_for_matching,
     get_top_suggestions,
     polish_faq_answer,
+    expert_answer,
 )
 from .ingest import ingest_path
 from .training import add_correction, search_correction, save_feedback, vectorstore_status
@@ -2581,6 +2582,49 @@ def chat(req: ChatRequest, request: Request):
         if cached is not None:
             track_cache_hit(q)
             return cached
+
+    # ----- EXPERT MODE (Claude Haiku 4.5 w/ full FAQ context + prompt cache) -----
+    # Primary answer path: let the LLM act as a Wifipool/Beniferro expert that has
+    # the full 308-row FAQ in its (cached) context, and generate a natural answer
+    # in the user's language. Falls back to legacy cascade on any error.
+    if q and not clarify_ref and _FAQ:
+        try:
+            ex = expert_answer(q, lang_code, _FAQ)
+            ex_answer = (ex.get("answer") or "").strip()
+            if ex_answer and not ex.get("error"):
+                primary_source = ex.get("primary_source")
+                matched_row = None
+                if isinstance(primary_source, int):
+                    for r in _FAQ:
+                        if r.get("excel_row") == primary_source:
+                            matched_row = r
+                            break
+                citations = []
+                if matched_row:
+                    try:
+                        citations = _citations_for_row(matched_row)
+                    except Exception:
+                        citations = []
+                response = {
+                    "answer": ex_answer,
+                    "citations": citations,
+                    "source": "expert",
+                    "confidence": ex.get("confidence"),
+                }
+                if ex.get("out_of_scope"):
+                    response["source"] = "expert_out_of_scope"
+                if matched_row:
+                    _enrich_response_with_media(response, matched_row)
+                alt_qs = ex.get("alternative_questions") or []
+                if ex.get("ambiguous") and alt_qs:
+                    response["clarify"] = {"ref": q, "options": alt_qs, "tips": []}
+                result = _add_suggestions_to_response(response, q, lang_code, matched_row)
+                cache_set(normalize_for_cache(q), result)
+                return result
+            else:
+                logger.info(f"expert_answer returned empty/error, falling back: {ex.get('error')}")
+        except Exception as _ex_err:
+            logger.warning(f"expert_answer failed, falling back: {_ex_err}")
 
     # ----- MODE SUGGESTIONS MULTIPLES -----
     # Si top_k > 1, utiliser le nouveau système de suggestions multiples
