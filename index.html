@@ -484,6 +484,10 @@
 
 <script>
     const API_URL = '/chat';
+    const HEALTH_URL = '/health';
+
+    // Warm up the backend to avoid Render free-tier cold starts on first message.
+    fetch(HEALTH_URL).catch(() => {});
 
     const chatMessages = document.getElementById('chatMessages');
     const userInput = document.getElementById('userInput');
@@ -698,7 +702,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query: question }),
-                signal: AbortSignal.timeout(30000)
+                signal: AbortSignal.timeout(60000)
             });
 
             removeTyping();
