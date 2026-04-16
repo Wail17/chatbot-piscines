@@ -37,7 +37,7 @@ from .config import (
 
 # ── New feature modules (all optional – graceful degradation) ────────────────
 try:
-    from .response_cache import init_cache, cache_get, cache_set, cache_stats, normalize_for_cache
+    from .response_cache import init_cache, cache_get, cache_set, cache_stats, normalize_for_cache, cache_invalidate_all
     _CACHE_AVAILABLE = True
 except ImportError:
     _CACHE_AVAILABLE = False
@@ -45,6 +45,7 @@ except ImportError:
     def cache_set(q, r): pass
     def cache_stats(): return {"enabled": False}
     def normalize_for_cache(q): return q.lower().strip()
+    def cache_invalidate_all(): pass
 
 try:
     from .query_preprocessor import preprocess_query, QueryIntent
@@ -3022,6 +3023,17 @@ app.mount("/faq_images", StaticFiles(directory=_FAQ_IMAGES_DIR), name="faq_image
 # ---------------------------------------------------------------------
 # Admin: reload from Excel (AI 2.0.xlsx → JSONL + images)
 # ---------------------------------------------------------------------
+@app.post("/admin/clear-cache")
+async def clear_cache_endpoint():
+    """Clear the response cache (call after deploying a new answer generation logic)."""
+    try:
+        cache_invalidate_all()
+        _HISTORY_BY_CLIENT.clear()
+        return {"ok": True, "message": "Response cache and conversation history cleared"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cache clear failed: {e}")
+
+
 @app.post("/admin/reload-excel")
 async def reload_from_excel_endpoint(polish: bool = False):
     """Rebuild FAQAI.jsonl + faq_images/ from AI 2.0.xlsx and reload the in-memory FAQ.
