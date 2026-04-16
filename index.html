@@ -369,6 +369,46 @@
             padding-left: 40px;
         }
 
+        /* ── FAQ image / video ──────────────────────────────── */
+        .faq-image {
+            max-width: 100%;
+            max-height: 240px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            display: block;
+            margin-top: 4px;
+            background: #f8fafc;
+        }
+        .video-thumb {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+        }
+        .video-thumb .video-play {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 52px; height: 52px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.65);
+            color: #fff;
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .video-thumb-link:hover .faq-image { opacity: 0.88; }
+        .video-link {
+            display: inline-block;
+            padding: 8px 14px;
+            background: #f1f5f9;
+            border-radius: 10px;
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 14px;
+        }
+
         /* ── Error bubble ────────────────────────────────────── */
         .bubble.error {
             background: #fee2e2;
@@ -557,6 +597,63 @@
         chatMessages.appendChild(el);
     }
 
+    function addImage(url) {
+        if (!url) return;
+        const row = document.createElement('div');
+        row.className = 'message-row bot';
+        const src = url.startsWith('http') ? url : url;
+        row.innerHTML = `
+            <div class="bot-avatar">📷</div>
+            <div>
+                <a href="${escAttr(src)}" target="_blank" rel="noopener">
+                    <img src="${escAttr(src)}" alt="Illustratie" class="faq-image" loading="lazy">
+                </a>
+            </div>`;
+        chatMessages.appendChild(row);
+        scrollBottom();
+    }
+
+    function addVideo(url) {
+        if (!url) return;
+        const videoId = extractYouTubeId(url);
+        const row = document.createElement('div');
+        row.className = 'message-row bot';
+        if (videoId) {
+            const thumb = `https://img.youtube.com/vi/${videoId}/0.jpg`;
+            row.innerHTML = `
+                <div class="bot-avatar">▶️</div>
+                <div>
+                    <a href="${escAttr(url)}" target="_blank" rel="noopener" class="video-thumb-link" title="Video openen op YouTube">
+                        <div class="video-thumb">
+                            <img src="${escAttr(thumb)}" alt="Video thumbnail" class="faq-image">
+                            <span class="video-play">▶</span>
+                        </div>
+                    </a>
+                </div>`;
+        } else {
+            row.innerHTML = `
+                <div class="bot-avatar">▶️</div>
+                <div>
+                    <a href="${escAttr(url)}" target="_blank" rel="noopener" class="video-link">🎬 Bekijk de video</a>
+                </div>`;
+        }
+        chatMessages.appendChild(row);
+        scrollBottom();
+    }
+
+    function extractYouTubeId(url) {
+        if (!url) return null;
+        const patterns = [
+            /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([A-Za-z0-9_-]{11})/,
+            /youtube\.com\/shorts\/([A-Za-z0-9_-]{11})/,
+        ];
+        for (const re of patterns) {
+            const m = url.match(re);
+            if (m) return m[1];
+        }
+        return null;
+    }
+
     function formatAnswer(text) {
         // Convert newlines to <br>, basic markdown *bold*
         return escHtml(text)
@@ -616,12 +713,18 @@
 
             addMessage(answer, 'bot');
 
+            // Image (extracted from Excel)
+            if (data.image_url) addImage(data.image_url);
+
+            // Video (YouTube URL from Excel Filmpje column)
+            if (data.video_url) addVideo(data.video_url);
+
             // Source / citations
             if (data.citations && data.citations.length > 0) {
                 addSource(data.citations[0].title || data.citations[0]);
             }
 
-            // Follow-up suggestions
+            // Follow-up suggestions (also shown as alternatives when the bot isn't sure)
             if (data.suggestions && data.suggestions.length > 0) {
                 addSuggestions(data.suggestions.slice(0, 3));
             }

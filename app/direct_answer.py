@@ -99,6 +99,7 @@ def try_direct_answer(
         "score": top_score,
         "source": "direct_faq",
         "citations": [{"title": question, "source": "faq", "page": None}],
+        "row": top_entry,
     }
 
 

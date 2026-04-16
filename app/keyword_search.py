@@ -552,11 +552,22 @@ def _load_faq_direct(jsonl_path: Optional[str] = None) -> List[Dict]:
                 ).strip()
 
                 if question and answer:
-                    entries.append({
+                    entry = {
                         "question": question,
                         "answer": answer,
                         "category": category,
-                    })
+                    }
+                    for key in (
+                        "ENQuestion", "ENAnswer",
+                        "FRQuestion", "FRReponse",
+                        "DEFrage", "DEAntwort",
+                        "image_path", "video_url", "Filmpje",
+                        "excel_row", "alt_questions",
+                    ):
+                        val = obj.get(key)
+                        if val not in (None, "", []):
+                            entry[key] = val
+                    entries.append(entry)
             except Exception:
                 continue
 

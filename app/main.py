@@ -293,9 +293,42 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                 if video_str:
                     row["video_url"] = video_str
 
+                image_path = _coerce_str(
+                    obj.get("image_path")
+                    or obj.get("image_url")
+                    or obj.get("image")
+                    or obj.get("Foto")
+                )
+                if image_path:
+                    row["image_path"] = image_path
+
+                alt_raw = obj.get("alt_questions") or obj.get("alternatieve_vragen") or []
+                if isinstance(alt_raw, list):
+                    alt_list = [str(a).strip() for a in alt_raw if str(a).strip()]
+                    if alt_list:
+                        row["alt_questions"] = alt_list
+
                 tags = obj.get("tags")
                 if isinstance(tags, list):
                     row["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+
+                for src_key, dst_key in [
+                    ("ENQuestion", "ENQuestion"), ("EN_Question", "ENQuestion"),
+                    ("ENAnswer", "ENAnswer"), ("EN_Answer", "ENAnswer"),
+                    ("FRQuestion", "FRQuestion"), ("FR_Question", "FRQuestion"),
+                    ("FRReponse", "FRReponse"), ("FR_Reponse", "FRReponse"),
+                    ("DEFrage", "DEFrage"), ("DE_Frage", "DEFrage"),
+                    ("DEAntwort", "DEAntwort"), ("DE_Antwort", "DEAntwort"),
+                ]:
+                    val = _coerce_str(obj.get(src_key))
+                    if val:
+                        row[dst_key] = val
+
+                excel_row_raw = obj.get("excel_row")
+                if isinstance(excel_row_raw, int):
+                    row["excel_row"] = excel_row_raw
+                elif isinstance(excel_row_raw, str) and excel_row_raw.strip().isdigit():
+                    row["excel_row"] = int(excel_row_raw.strip())
 
                 rows.append(row)
     except Exception as e:
@@ -602,14 +635,21 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
         "zout",
         "zoutelektrolyse",
         "electrolyse",
+        "elektrolyse",
         "chlorinator",
         "salt",
         "saltelektrolyse",
         "salzelektrolyse",
         "salzelectrolyse",
         "zoutelektrolysetoestel",
+        "elektrolysetoestel",
         "zout elektrolyse",
         "salt electrolysis",
+        "electrolysis",
+        "electrolyser",
+        "electrolyzer",
+        "electrolyseur",
+        "électrolyseur",
         "saltwater chlorinator",
         "salt chlorinator",
         "salzelektrolysegerät",
@@ -628,10 +668,44 @@ _SYNONYM_GROUPS: Dict[str, Set[str]] = {
         "wil niet starten",
         "wil niet opstarten",
         "springt niet aan",
+        "aangaan",
+        "aanzetten",
+        "opstarten",
+        "inschakelen",
         "startet nicht",
         "geht nicht an",
-        "no arranca",
+        "einschalten",
+        "anschalten",
+        "start nicht",
+        "lässt sich nicht einschalten",
         "ne démarre pas",
+        "ne demarre pas",
+        "demarrer",
+        "démarrer",
+        "allumer",
+        "s'allumer",
+        "s allumer",
+        "s'allume",
+        "s allume",
+        "ne s'allume pas",
+        "ne s allume pas",
+        "mettre en marche",
+        "mettre en route",
+        "se met en route",
+        "ne se met pas en route",
+        "turn on",
+        "turning on",
+        "switch on",
+        "power on",
+        "not on",
+        "won't turn on",
+        "wont turn on",
+        "not starting",
+        "won't start",
+        "wont start",
+        "doesn't start",
+        "does not start",
+        "no arranca",
     },
     "gen1": {
         "gen1",
@@ -725,6 +799,17 @@ def _row_norms(row: dict) -> Tuple[str, str]:
             label_norm = _normalize(str(label))
             if label_norm:
                 parts.append(label_norm)
+    # Include alternative phrasings + multilingual questions so they participate in matching
+    for alt in (row.get("alt_questions") or []):
+        alt_norm = _normalize(str(alt))
+        if alt_norm:
+            parts.append(alt_norm)
+    for lang_field in ("ENQuestion", "FRQuestion", "DEFrage"):
+        alt_q = row.get(lang_field)
+        if alt_q:
+            alt_norm = _normalize(str(alt_q))
+            if alt_norm:
+                parts.append(alt_norm)
     augmented = _apply_synonyms(" ".join(p for p in parts if p))
     row["_norm_pair"] = (base, augmented)
     return row["_norm_pair"]
@@ -758,6 +843,13 @@ def _row_semantic_text(row: dict) -> str:
     options = row.get("options") or {}
     if isinstance(options, dict):
         parts.extend(str(label) for label in options.keys() if str(label).strip())
+    for alt in (row.get("alt_questions") or []):
+        if str(alt).strip():
+            parts.append(str(alt).strip())
+    for lang_field in ("ENQuestion", "FRQuestion", "DEFrage"):
+        alt_q = row.get(lang_field)
+        if alt_q and str(alt_q).strip():
+            parts.append(str(alt_q).strip())
     _, augmented = _row_norms(row)
     if augmented:
         for token in augmented.split(" "):
@@ -1085,6 +1177,35 @@ def _get_question_in_language(row: dict, lang_code: str) -> str:
         question = (row.get("question") or row.get("Vraag") or "").strip()
 
     return question
+
+
+def _get_answer_in_language(row: dict, lang_code: str) -> Optional[str]:
+    """Return pre-translated answer from Excel if available for the target language."""
+    if not row or not lang_code:
+        return None
+    lang_fields = {
+        "fr": "FRReponse",
+        "de": "DEAntwort",
+        "en": "ENAnswer",
+    }
+    field = lang_fields.get(lang_code)
+    if not field:
+        return None
+    val = (row.get(field) or "").strip()
+    return val or None
+
+
+def _enrich_response_with_media(response: Dict[str, Any], row: Optional[dict]) -> Dict[str, Any]:
+    """Add image_url and video_url fields (when available) to a response dict."""
+    if not isinstance(row, dict) or not isinstance(response, dict):
+        return response
+    image_path = (row.get("image_path") or "").strip()
+    if image_path and "image_url" not in response:
+        response["image_url"] = image_path
+    video_url = (row.get("video_url") or "").strip()
+    if video_url and "video_url" not in response:
+        response["video_url"] = video_url
+    return response
 
 
 def _get_faq_suggestions_with_scores(
@@ -1646,7 +1767,15 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
                 response["suggestions"] = suggestions
         return response
 
-    direct = (row.get("answer") or row.get("antwoord") or "").strip()
+    # Language-first: if Excel has pre-translated answer in user's language, use it directly
+    # (skip the LLM translation roundtrip entirely)
+    pretrans = _get_answer_in_language(row, lang_code)
+    if pretrans:
+        direct = pretrans
+        _skip_translation = True
+    else:
+        direct = (row.get("answer") or row.get("antwoord") or "").strip()
+        _skip_translation = False
 
     # Check if FAQ answer is empty or too short/unhelpful - use GPT fallback
     MIN_ANSWER_LENGTH = 30  # Minimum meaningful answer length
@@ -1701,15 +1830,24 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
 
     # FAQ has a good answer - return it
     if direct:
-        extra_line = "\n\nBekijk video: " + str(row["video_url"]) if row.get("video_url") else ""
+        # Only append video line when no dedicated image/video will be rendered
+        has_media = bool(row.get("image_path")) or bool(row.get("video_url"))
+        extra_line = ""
+        if row.get("video_url") and not has_media:
+            extra_line = "\n\nBekijk video: " + str(row["video_url"])
+
+        answer_text = direct + extra_line if not _skip_translation else direct + extra_line
+        final_answer = direct + extra_line if _skip_translation else _ensure_language(answer_text, lang_code)
+
         response = {
-            "answer": _ensure_language(direct + extra_line, lang_code),
+            "answer": final_answer,
             "citations": _citations_for_row(row),
             "source": "faq"
         }
         media = _extract_media_from_payload(row)
         if media:
             response["media"] = media
+        _enrich_response_with_media(response, row)
 
         # ALWAYS generate similar question suggestions (never return without them)
         # This helps reduce fault rate by guiding users to related questions
@@ -2590,12 +2728,16 @@ def chat(req: ChatRequest, request: Request):
             if direct_result is None and translated_query:
                 direct_result = get_direct_answer_with_suggestions(translated_query)
             if direct_result is not None:
+                matched_row = direct_result.get("row") or {}
+                pre_translated = _get_answer_in_language(matched_row, lang_code)
+                answer_text = pre_translated or _ensure_language(direct_result["answer"], lang_code)
                 response = {
-                    "answer": _ensure_language(direct_result["answer"], lang_code),
+                    "answer": answer_text,
                     "citations": direct_result.get("citations", []),
                     "source": "direct_faq",
                     "confidence": direct_result.get("confidence"),
                 }
+                _enrich_response_with_media(response, matched_row)
                 if direct_result.get("suggestions"):
                     response["suggestions"] = direct_result["suggestions"]
                 cache_set(normalize_for_cache(q), response)
@@ -2731,3 +2873,36 @@ async def serve_dashboard():
     """Serve the admin dashboard"""
     dashboard_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dashboard.html")
     return FileResponse(dashboard_path)
+
+
+# ---------------------------------------------------------------------
+# Static FAQ images (extracted from Excel)
+# ---------------------------------------------------------------------
+_FAQ_IMAGES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "app", "data", "faq_images")
+os.makedirs(_FAQ_IMAGES_DIR, exist_ok=True)
+app.mount("/faq_images", StaticFiles(directory=_FAQ_IMAGES_DIR), name="faq_images")
+
+
+# ---------------------------------------------------------------------
+# Admin: reload from Excel (AI 2.0.xlsx → JSONL + images)
+# ---------------------------------------------------------------------
+@app.post("/admin/reload-excel")
+async def reload_from_excel_endpoint():
+    """Rebuild FAQAI.jsonl + faq_images/ from AI 2.0.xlsx and reload the in-memory FAQ."""
+    try:
+        from .excel_loader import reload_from_excel
+        summary = reload_from_excel()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception("Excel reload failed")
+        raise HTTPException(status_code=500, detail=f"Excel reload failed: {e}")
+
+    count, _ = _reload_faq()
+    return {
+        "ok": True,
+        "entries": summary["entries"],
+        "images": summary["images"],
+        "synonym_groups": summary["synonym_groups"],
+        "faq_loaded": count,
+    }

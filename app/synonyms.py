@@ -112,12 +112,17 @@ SYNONYM_GROUPS: List[Dict] = [
         "terms": [
             # NL
             "elektrolyse", "zoutelektrolyse", "zoutchlorinatie", "electrolyse",
-            "zout systeem", "zoutwater systeem",
+            "zout systeem", "zoutwater systeem", "zoutelektrolysetoestel",
+            "elektrolysetoestel",
             # FR
             "electrolyse", "électrolyse", "electrolyse au sel", "chloration sel",
+            "electrolyseur", "électrolyseur", "cellule d'electrolyse",
             # EN
             "electrolysis", "salt electrolysis", "salt chlorination",
-            "saltwater system", "salt cell",
+            "saltwater system", "salt cell", "electrolyser", "electrolyzer",
+            # DE
+            "salzelektrolyse", "salzelectrolyse", "salzelektrolysegerät",
+            "elektrolyse", "elektrolyseur",
             # Product names
             "electrolyzer", "elektrolyseur", "zoutcel", "cel",
         ],
@@ -226,8 +231,12 @@ SYNONYM_GROUPS: List[Dict] = [
         "category": "device",
         "terms": [
             # Product names
-            "wifipool", "wifi pool", "wifi-pool", "wifipool apparaat",
+            "wifipool", "wifi pool", "wifi-pool",
+            "wifipool apparaat", "wifipoolapparaat", "wifipool-apparaat",
+            "wifipool toestel", "wifipooltoestel", "wifipool-toestel",
             "wifipool controller", "wifipool module",
+            "beniferro apparaat", "beniferro toestel",
+            "beniferro-apparaat", "beniferro-toestel",
             # Abbreviations
             "wp", "wfp",
         ],
@@ -246,6 +255,8 @@ SYNONYM_GROUPS: List[Dict] = [
             # EN
             "device", "unit", "controller", "module", "system",
             "equipment",
+            # DE
+            "gerät", "geraet",
             # Related
             "box", "hub",
         ],
@@ -343,13 +354,44 @@ SYNONYM_GROUPS: List[Dict] = [
             "resetten", "reset", "herstarten", "herstart", "opnieuw opstarten",
             "factory reset", "fabrieksinstellingen", "terugzetten",
             "opnieuw instellen", "wissen", "initialiseren",
+            "naar begininstellingen brengen", "begininstellingen",
+            "herstellen", "standaardconfiguratie",
+            "software reset", "hardware reset",
+            "een software reset geven", "een hardware reset geven",
             # FR
             "reinitialiser", "réinitialiser", "reinitialisation",
             "réinitialisation", "redemarrer", "redémarrer",
             "remise à zero", "remise à zéro",
+            "reset usine", "restaurer",
             # EN
             "reset", "factory reset", "restart", "reboot", "reinitialize",
             "restore defaults", "hard reset", "soft reset",
+            # DE
+            "zurücksetzen", "zuruecksetzen", "neustart", "werkseinstellungen",
+        ],
+    },
+
+    {
+        "canonical": "opstarten",
+        "category": "action",
+        "terms": [
+            # NL
+            "opstarten", "starten", "aanzetten", "aangaan", "aanslaan",
+            "gaat aan", "gaat niet aan", "start niet", "start niet op",
+            "slaat niet aan", "werkt niet", "inschakelen",
+            # FR
+            "demarrer", "démarrer", "allumer", "s'allume", "s'allumer",
+            "mettre en marche", "mettre en route", "se met en route",
+            "ne se met pas en route", "ne demarre pas", "ne démarre pas",
+            "ne s'allume pas", "fonctionner",
+            # EN
+            "start", "start up", "starts", "turn on", "turning on",
+            "switch on", "power on", "not on", "won't turn on",
+            "does not start", "not starting", "won't start",
+            # DE
+            "starten", "einschalten", "anschalten", "anmachen",
+            "startet nicht", "geht nicht an", "lässt sich nicht einschalten",
+            "start nicht",
         ],
     },
 
@@ -756,9 +798,42 @@ _CANONICAL_TO_TERMS: Dict[str, List[str]] = {}
 _CATEGORY_CANONICALS: Dict[str, Set[str]] = {}
 
 
+def _load_excel_synonym_groups() -> List[Dict]:
+    """Load extra synonym groups written by excel_loader.py."""
+    import json
+    import os
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "app", "data", "excel_synonyms.json",
+    )
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception as e:
+        logger.warning("Could not load Excel synonyms: %s", e)
+        return []
+
+    extra: List[Dict] = []
+    for i, group in enumerate(raw):
+        if not isinstance(group, list) or len(group) < 2:
+            continue
+        terms = [str(t).strip().lower() for t in group if t and str(t).strip()]
+        if len(terms) < 2:
+            continue
+        extra.append({
+            "canonical": terms[0],
+            "category": "excel_import",
+            "terms": terms,
+        })
+    return extra
+
+
 def _build_lookup_maps() -> None:
-    """Build lookup maps from SYNONYM_GROUPS at module load time."""
-    for group in SYNONYM_GROUPS:
+    """Build lookup maps from SYNONYM_GROUPS + Excel groups at module load time."""
+    all_groups = SYNONYM_GROUPS + _load_excel_synonym_groups()
+    for group in all_groups:
         canonical = group["canonical"].lower().strip()
         category = group.get("category", "general")
         terms = [t.lower().strip() for t in group["terms"]]
@@ -767,15 +842,22 @@ def _build_lookup_maps() -> None:
         if canonical not in terms:
             terms.insert(0, canonical)
 
-        # Map each term → canonical
+        # Map each term → canonical (only if not already mapped to something else)
         for term in terms:
-            # Also add without accents
             clean_term = _strip_accents(term)
-            _TERM_TO_CANONICAL[term] = canonical
-            _TERM_TO_CANONICAL[clean_term] = canonical
+            if term not in _TERM_TO_CANONICAL:
+                _TERM_TO_CANONICAL[term] = canonical
+            if clean_term not in _TERM_TO_CANONICAL:
+                _TERM_TO_CANONICAL[clean_term] = canonical
 
-        # Map canonical → all terms
-        _CANONICAL_TO_TERMS[canonical] = terms
+        # Map canonical → all terms (merge if canonical already seen)
+        if canonical in _CANONICAL_TO_TERMS:
+            existing = _CANONICAL_TO_TERMS[canonical]
+            for t in terms:
+                if t not in existing:
+                    existing.append(t)
+        else:
+            _CANONICAL_TO_TERMS[canonical] = terms
 
         # Category tracking
         if category not in _CATEGORY_CANONICALS:

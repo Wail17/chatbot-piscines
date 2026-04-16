@@ -134,6 +134,17 @@ class FAQJSONLManager:
                         if "tags" in entry and isinstance(entry["tags"], list):
                             normalized_entry["tags"] = [coerce_string(t) for t in entry["tags"]]
 
+                        for extra_key in (
+                            "ENQuestion", "ENAnswer",
+                            "FRQuestion", "FRReponse",
+                            "DEFrage", "DEAntwort",
+                            "image_path", "video_url", "Filmpje",
+                            "excel_row", "alt_questions",
+                        ):
+                            val = entry.get(extra_key)
+                            if val not in (None, "", []):
+                                normalized_entry[extra_key] = val
+
                         entries.append(normalized_entry)
 
                     except json.JSONDecodeError as e:
