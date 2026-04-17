@@ -195,7 +195,7 @@
         .chat-messages {
             flex: 1;
             overflow-y: auto;
-            padding: 10px 16px 8px;
+            padding: 22px 16px 8px;
             display: flex;
             flex-direction: column;
             gap: 14px;
@@ -633,7 +633,11 @@
             backdrop-filter: blur(4px);
         }
         .lang-switch:hover { background: rgba(255,255,255,0.26); }
-        .lang-switch .lang-flag { font-size: 16px; }
+        .lang-switch .lang-icon {
+            width: 15px;
+            height: 15px;
+            stroke: currentColor;
+        }
     </style>
 </head>
 <body>
@@ -665,22 +669,16 @@
                 <span id="headerStatus">Online · ready to help</span>
             </div>
         </div>
-        <button class="lang-switch" id="langSwitch" type="button" title="Change language">
-            <span class="lang-flag" id="langSwitchFlag">🇬🇧</span>
+        <button class="lang-switch" id="langSwitch" type="button" title="Change language / Taal wijzigen / Changer de langue / Sprache ändern">
+            <svg class="lang-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M3 12h18"/>
+                <path d="M12 3a14 14 0 0 1 0 18"/>
+                <path d="M12 3a14 14 0 0 0 0 18"/>
+            </svg>
             <span id="langSwitchCode">EN</span>
         </button>
     </div>
-
-    <!-- Soft wave divider under the header -->
-    <svg class="header-wave" viewBox="0 0 480 28" preserveAspectRatio="none" aria-hidden="true">
-      <defs>
-        <linearGradient id="waveFill" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%"  stop-color="#12a9e0"/>
-          <stop offset="100%" stop-color="#0a78c4"/>
-        </linearGradient>
-      </defs>
-      <path d="M0,0 L480,0 L480,10 C400,26 320,26 240,16 C160,6 80,6 0,20 Z" fill="url(#waveFill)"/>
-    </svg>
 
     <!-- Messages -->
     <div class="chat-messages" id="chatMessages">
@@ -816,7 +814,6 @@
         document.getElementById('headerStatus').textContent = t.status;
         document.getElementById('quickLabel').textContent = t.quickLabel;
         userInput.placeholder = t.placeholder;
-        document.getElementById('langSwitchFlag').textContent = t.flag;
         document.getElementById('langSwitchCode').textContent = t.label;
         // Rebuild quick questions
         quickQuestions.innerHTML = t.quick.map(item =>
