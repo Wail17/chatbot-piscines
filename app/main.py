@@ -1230,6 +1230,37 @@ def _is_real_question(text: str) -> bool:
         return True
     return len(t.split()) >= 4
 
+
+# Tiny heuristic language detector for suggestion filtering. We can't trust the
+# Excel column headers — some rows have German text pasted in the ENQuestion
+# column — so we sniff obvious giveaway words in the suggestion itself.
+_LANG_MARKERS = {
+    "de": {"ist", "den", "der", "die", "für", "nicht", "können", "wie", "warum", "meiner", "mein", "eine", "auf", "zu", "von", "dem"},
+    "nl": {"hoe", "ik", "mijn", "wat", "niet", "heb", "kan", "waarom", "moet", "zijn", "een", "van", "met", "voor", "het"},
+    "fr": {"le", "la", "les", "mon", "ma", "est", "pourquoi", "comment", "je", "quel", "quelle", "dois", "puis", "avec", "pour"},
+    "en": {"the", "how", "my", "is", "why", "can", "do", "does", "should", "what", "are", "your", "i'm", "i", "a"},
+}
+
+def _suggestion_matches_lang(text: str, lang_code: str) -> bool:
+    """Return True if the suggestion's apparent language matches lang_code.
+
+    Uses word-level markers. Very short strings (< 3 tokens) are accepted as-is.
+    """
+    if not text or not lang_code:
+        return True
+    tokens = [w.lower().strip(".,?!;:'\"()") for w in text.split()]
+    tokens = [t for t in tokens if t]
+    if len(tokens) < 3:
+        return True
+    # Count marker hits per language
+    hits = {code: sum(1 for t in tokens if t in markers) for code, markers in _LANG_MARKERS.items()}
+    best = max(hits.values())
+    if best == 0:
+        return True  # no strong signal either way — let it through
+    # Allow if the target language is among the top-scoring candidates
+    top_langs = {code for code, h in hits.items() if h == best}
+    return lang_code in top_langs
+
 def _get_question_in_language(row: dict, lang_code: str) -> str:
     """Extract question text in the target language.
 
@@ -1425,7 +1456,7 @@ def _get_similar_questions(
 
             for row in available_rows:
                 question = _get_question_in_language(row, lang_code)
-                if question and _is_real_question(question):
+                if question and _is_real_question(question) and _suggestion_matches_lang(question, lang_code):
                     question_normalized = question.strip().lower()
                     if question_normalized not in seen_questions:
                         suggestions.append(question)
@@ -1469,7 +1500,7 @@ def _get_similar_questions(
 
         for row, score in candidates[:max_count * 2]:  # Check more to handle duplicates
             question = _get_question_in_language(row, lang_code)
-            if question and _is_real_question(question):
+            if question and _is_real_question(question) and _suggestion_matches_lang(question, lang_code):
                 question_normalized = question.strip().lower()
                 if question_normalized not in seen_questions:
                     suggestions.append(question)
@@ -1491,7 +1522,7 @@ def _get_similar_questions(
                     continue
                 if category and row.get("category") == category:
                     question = _get_question_in_language(row, lang_code)
-                    if question and _is_real_question(question):
+                    if question and _is_real_question(question) and _suggestion_matches_lang(question, lang_code):
                         question_normalized = question.strip().lower()
                         if question_normalized not in seen_questions:
                             suggestions.append(question)
@@ -1509,7 +1540,7 @@ def _get_similar_questions(
                 if len(suggestions) >= max_count:
                     break
                 question = _get_question_in_language(row, lang_code)
-                if question and _is_real_question(question):
+                if question and _is_real_question(question) and _suggestion_matches_lang(question, lang_code):
                     question_normalized = question.strip().lower()
                     if question_normalized not in seen_questions:
                         suggestions.append(question)
@@ -1537,7 +1568,7 @@ def _get_similar_questions(
 
             for row in available_rows[:max_count]:
                 question = _get_question_in_language(row, lang_code)
-                if question and _is_real_question(question):
+                if question and _is_real_question(question) and _suggestion_matches_lang(question, lang_code):
                     question_normalized = question.strip().lower()
                     if question_normalized not in seen_questions:
                         suggestions.append(question)
