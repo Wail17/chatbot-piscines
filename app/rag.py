@@ -377,7 +377,7 @@ def expert_answer(
     try:
         resp = anthropic_client.messages.create(
             model=_EXPERT_MODEL,
-            max_tokens=1200,
+            max_tokens=1000,
             temperature=0.2,
             system=[
                 {"type": "text", "text": system_prompt},
@@ -388,6 +388,7 @@ def expert_answer(
                 },
             ],
             messages=_build_expert_messages(question, history),
+            timeout=45.0,
         )
         raw = resp.content[0].text if resp.content else ""
     except Exception as e:

@@ -702,7 +702,7 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query: question }),
-                signal: AbortSignal.timeout(60000)
+                signal: AbortSignal.timeout(90000)
             });
 
             removeTyping();
