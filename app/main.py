@@ -1862,7 +1862,7 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
         response = {
             "answer": _ensure_language(answer_text, lang_code),
             "clarify": {"ref": row.get("question"), "options": labels, "tips": tips},
-            "citations": _citations_for_row(row),
+            "citations": _citations_for_row(row, lang_code),
             "source": "faq"
         }
         # Add suggestions even for follow-up questions
@@ -1899,7 +1899,7 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
             ai_note = _AI_NOTES_INNER.get(lang_code, _AI_NOTES_INNER["nl"])
             response = {
                 "answer": gpt_answer + ai_note,
-                "citations": _citations_for_row(row),
+                "citations": _citations_for_row(row, lang_code),
                 "source": "ai_fallback"
             }
             if user_q:
@@ -1918,7 +1918,7 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
             )
             response = {
                 "answer": _ensure_language(friendly_msg, lang_code),
-                "citations": _citations_for_row(row),
+                "citations": _citations_for_row(row, lang_code),
                 "source": "faq"
             }
         else:
@@ -1947,7 +1947,7 @@ def _respond_for_row(row: dict, lang_code: str, client_id: str, user_q: str = ""
 
         response = {
             "answer": final_answer,
-            "citations": _citations_for_row(row),
+            "citations": _citations_for_row(row, lang_code),
             "source": "faq"
         }
         media = _extract_media_from_payload(row)
@@ -2238,8 +2238,11 @@ def _build_answer_for_option(row: dict, option_label: str) -> Tuple[str, Optiona
     text = (intro + "\n\n" + body).strip() if intro else body
     return text, (media or None)
 
-def _citations_for_row(row: dict) -> List[dict]:
-    return [{"title": row.get("question") or "FAQ", "source": row.get("source") or "", "page": None}]
+def _citations_for_row(row: dict, lang_code: str = "nl") -> List[dict]:
+    title = ""
+    if row:
+        title = _get_question_in_language(row, lang_code) or (row.get("question") or "")
+    return [{"title": title or "FAQ", "source": row.get("source") or "" if row else "", "page": None}]
 
 def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(extra, dict): return None
@@ -2667,7 +2670,7 @@ def chat(req: ChatRequest, request: Request):
                 citations = []
                 if matched_row:
                     try:
-                        citations = _citations_for_row(matched_row)
+                        citations = _citations_for_row(matched_row, lang_code)
                     except Exception:
                         citations = []
                 response = {
@@ -2784,7 +2787,7 @@ def chat(req: ChatRequest, request: Request):
             chosen = _choose_gen_answer(base_row, gen_key)
             if chosen:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
+                response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row, lang_code), "source": "faq"}
                 return _add_suggestions_to_response(response, q, lang_code, base_row)
 
         labels = _labels(base_row)
@@ -2792,7 +2795,7 @@ def chat(req: ChatRequest, request: Request):
             direct = (base_row.get("answer") or base_row.get("antwoord") or "").strip()
             if direct:
                 _PENDING_BY_CLIENT.pop(client_id, None)
-                response = {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
+                response = {"answer": _ensure_language(direct, lang_code), "citations": _citations_for_row(base_row, lang_code), "source": "faq"}
                 return _add_suggestions_to_response(response, q, lang_code, base_row)
             response = {"answer": _ensure_language("Geen antwoord gevonden.", lang_code), "citations": [], "source": "faq"}
             return _add_suggestions_to_response(response, q, lang_code, base_row)
@@ -2801,13 +2804,13 @@ def chat(req: ChatRequest, request: Request):
         if not label:
             response = {
                 "answer": _ensure_language("Ik herken deze keuze niet. Kies één van: " + ", ".join(labels), lang_code),
-                "citations": _citations_for_row(base_row),
+                "citations": _citations_for_row(base_row, lang_code),
                 "source": "faq"
             }
             return _add_suggestions_to_response(response, q, lang_code, base_row)
         answer, media = _build_answer_for_option(base_row, label)
         _PENDING_BY_CLIENT.pop(client_id, None)
-        response = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
+        response = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row, lang_code), "source": "faq"}
         if media:
             response["media"] = media
         return _add_suggestions_to_response(response, q, lang_code, base_row)
@@ -2854,7 +2857,7 @@ def chat(req: ChatRequest, request: Request):
                     chosen = _choose_gen_answer(base_row, gen_key)
                     if chosen:
                         _PENDING_BY_CLIENT.pop(client_id, None)
-                        response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
+                        response = {"answer": _ensure_language(chosen, lang_code), "citations": _citations_for_row(base_row, lang_code), "source": "faq"}
                         return _add_suggestions_to_response(response, q, lang_code, base_row)
 
                 if labels:
@@ -2865,7 +2868,7 @@ def chat(req: ChatRequest, request: Request):
                     if label:
                         _PENDING_BY_CLIENT.pop(client_id, None)
                         answer, media = _build_answer_for_option(base_row, label)
-                        resp = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row), "source": "faq"}
+                        resp = {"answer": _ensure_language(answer, lang_code), "citations": _citations_for_row(base_row, lang_code), "source": "faq"}
                         if media:
                             resp["media"] = media
                         return _add_suggestions_to_response(resp, q, lang_code, base_row)
