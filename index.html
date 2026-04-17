@@ -1128,15 +1128,6 @@
                 addChoices(data.choices);
             }
 
-            // Disambiguation alternatives ("Do you mean: 1) ... 2) ...")
-            if (data.clarify && data.clarify.options && data.clarify.options.length > 0) {
-                addChoices(data.clarify.options);
-            }
-
-            if (data.suggestions && data.suggestions.length > 0) {
-                addSuggestions(data.suggestions.slice(0, 3));
-            }
-
         } catch (err) {
             removeTyping();
             const t = I18N[currentLang] || I18N.en;
