@@ -1212,28 +1212,50 @@ def _add_suggestions_to_response(
     return response
 
 
+_JUNK_SUGGESTIONS = {
+    "algemeen", "general", "général", "allgemein",
+    "wifipool algemeen", "wifipool general",
+}
+
+def _is_real_question(text: str) -> bool:
+    """Filter out category-label noise (e.g. 'Algemeen') from suggestion lists."""
+    if not text:
+        return False
+    t = text.strip()
+    if t.lower() in _JUNK_SUGGESTIONS:
+        return False
+    # A real question usually has a '?' OR is a clear sentence (several words).
+    if "?" in t:
+        return True
+    return len(t.split()) >= 4
+
 def _get_question_in_language(row: dict, lang_code: str) -> str:
-    """Extract question text in the appropriate language."""
+    """Extract question text in the target language.
+
+    For non-NL languages, we REQUIRE a translation in that language — we never
+    fall back to the Dutch source, because leaking Dutch into an English/French
+    conversation looks broken to the user.
+    """
     if not row:
         return ""
 
-    # Map language codes to field names
     lang_fields = {
         "fr": "FRQuestion",
         "de": "DEFrage",
         "en": "ENQuestion",
-        "nl": "Vraag"
+        "nl": "Vraag",
     }
-
-    # Try to get question in requested language
     field = lang_fields.get(lang_code, "Vraag")
     question = (row.get(field) or "").strip()
 
-    # Fall back to main question field or "Vraag"
-    if not question:
-        question = (row.get("question") or row.get("Vraag") or "").strip()
+    if question:
+        return question
 
-    return question
+    # Only fall back to NL when the conversation itself is in NL.
+    if lang_code == "nl":
+        return (row.get("question") or row.get("Vraag") or "").strip()
+
+    return ""
 
 
 def _get_answer_in_language(row: dict, lang_code: str) -> Optional[str]:
@@ -1402,7 +1424,7 @@ def _get_similar_questions(
 
             for row in available_rows:
                 question = _get_question_in_language(row, lang_code)
-                if question:
+                if question and _is_real_question(question):
                     question_normalized = question.strip().lower()
                     if question_normalized not in seen_questions:
                         suggestions.append(question)
@@ -1446,7 +1468,7 @@ def _get_similar_questions(
 
         for row, score in candidates[:max_count * 2]:  # Check more to handle duplicates
             question = _get_question_in_language(row, lang_code)
-            if question:
+            if question and _is_real_question(question):
                 question_normalized = question.strip().lower()
                 if question_normalized not in seen_questions:
                     suggestions.append(question)
@@ -1468,7 +1490,7 @@ def _get_similar_questions(
                     continue
                 if category and row.get("category") == category:
                     question = _get_question_in_language(row, lang_code)
-                    if question:
+                    if question and _is_real_question(question):
                         question_normalized = question.strip().lower()
                         if question_normalized not in seen_questions:
                             suggestions.append(question)
@@ -1486,7 +1508,7 @@ def _get_similar_questions(
                 if len(suggestions) >= max_count:
                     break
                 question = _get_question_in_language(row, lang_code)
-                if question:
+                if question and _is_real_question(question):
                     question_normalized = question.strip().lower()
                     if question_normalized not in seen_questions:
                         suggestions.append(question)
@@ -1514,7 +1536,7 @@ def _get_similar_questions(
 
             for row in available_rows[:max_count]:
                 question = _get_question_in_language(row, lang_code)
-                if question:
+                if question and _is_real_question(question):
                     question_normalized = question.strip().lower()
                     if question_normalized not in seen_questions:
                         suggestions.append(question)

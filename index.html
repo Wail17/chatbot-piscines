@@ -53,6 +53,10 @@
             overflow: hidden;
         }
 
+        @media (max-width: 560px) {
+            body { padding: 0; }
+        }
+
         /* Subtle caustic shimmer in the background */
         body::before {
             content: "";
@@ -77,7 +81,7 @@
             z-index: 1;
             width: 100%;
             max-width: 480px;
-            height: min(720px, 96vh);
+            height: min(740px, 96vh);
             background: linear-gradient(180deg, #ffffff 0%, #f6fbfd 100%);
             border-radius: var(--radius-xl);
             display: flex;
@@ -89,39 +93,45 @@
               0 0 0 1px rgba(255,255,255,0.25);
         }
 
+        @media (max-width: 560px) {
+            .chat-window {
+                max-width: 100%;
+                height: 100vh;
+                height: 100dvh;
+                border-radius: 0;
+                box-shadow: none;
+            }
+        }
+
         /* ── Header ─────────────────────────────────────────── */
         .chat-header {
             position: relative;
             background:
               linear-gradient(135deg, #063f74 0%, #0a78c4 55%, #12a9e0 100%);
-            padding: 18px 20px 22px;
+            padding: 20px 22px 24px;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
             flex-shrink: 0;
             color: #fff;
             overflow: hidden;
-        }
-        .chat-header::after {
-            /* soft wave at the bottom of the header */
-            content: "";
-            position: absolute;
-            left: -5%;
-            right: -5%;
-            bottom: -1px;
-            height: 22px;
-            background:
-              radial-gradient(60% 100% at 50% 0%, transparent 60%, rgba(246,251,253,1) 62%);
-            pointer-events: none;
         }
         .chat-header::before {
             content: "";
             position: absolute;
             inset: 0;
             background:
-              radial-gradient(240px 120px at 15% 20%, rgba(255,255,255,0.18), transparent 60%),
-              radial-gradient(220px 120px at 90% 80%, rgba(255,255,255,0.10), transparent 60%);
+              radial-gradient(280px 140px at 18% 25%, rgba(255,255,255,0.20), transparent 65%),
+              radial-gradient(260px 140px at 92% 85%, rgba(255,255,255,0.10), transparent 65%);
             pointer-events: none;
+        }
+        /* Clean SVG wave divider under the header */
+        .header-wave {
+            display: block;
+            width: 100%;
+            height: 28px;
+            margin-top: -1px;
+            flex-shrink: 0;
         }
 
         .bot-avatar-header {
@@ -185,7 +195,7 @@
         .chat-messages {
             flex: 1;
             overflow-y: auto;
-            padding: 22px 16px 8px;
+            padding: 10px 16px 8px;
             display: flex;
             flex-direction: column;
             gap: 14px;
@@ -512,6 +522,17 @@
         </div>
         <div class="header-logo">WiFiPool<br>Support</div>
     </div>
+
+    <!-- Soft wave divider under the header -->
+    <svg class="header-wave" viewBox="0 0 480 28" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="waveFill" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%"  stop-color="#12a9e0"/>
+          <stop offset="100%" stop-color="#0a78c4"/>
+        </linearGradient>
+      </defs>
+      <path d="M0,0 L480,0 L480,10 C400,26 320,26 240,16 C160,6 80,6 0,20 Z" fill="url(#waveFill)"/>
+    </svg>
 
     <!-- Messages -->
     <div class="chat-messages" id="chatMessages">
