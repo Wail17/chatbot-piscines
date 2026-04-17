@@ -620,6 +620,15 @@
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
+    // Scroll so the TOP of the given element is visible at the top of the
+    // messages area — used for long bot answers so the user can read from
+    // the beginning without scrolling back up.
+    function scrollToTopOf(el) {
+        if (!el) return;
+        const target = el.offsetTop - 12;
+        chatMessages.scrollTo({ top: target, behavior: 'smooth' });
+    }
+
     function addMessage(text, type, time) {
         const row = document.createElement('div');
         row.className = `message-row ${type === 'user' ? 'user' : 'bot'}`;
@@ -632,18 +641,51 @@
                     <div class="bubble user">${escHtml(text)}</div>
                     <div class="bubble-time">${t}</div>
                 </div>`;
-        } else {
-            row.innerHTML = `
-                <div class="bot-avatar">🏊</div>
-                <div>
-                    <div class="bubble ${type}">${type === 'error' ? escHtml(text) : formatAnswer(text)}</div>
-                    <div class="bubble-time">${t}</div>
-                </div>`;
+            chatMessages.appendChild(row);
+            scrollBottom();
+            return row;
         }
 
+        // Bot / error message
+        row.innerHTML = `
+            <div class="bot-avatar">🏊</div>
+            <div>
+                <div class="bubble ${type}"></div>
+                <div class="bubble-time">${t}</div>
+            </div>`;
         chatMessages.appendChild(row);
-        scrollBottom();
+
+        const bubble = row.querySelector('.bubble');
+        if (type === 'error') {
+            bubble.textContent = text;
+            scrollBottom();
+            return row;
+        }
+
+        // Anchor the new bubble at the top of the viewport, then type it out.
+        scrollToTopOf(row);
+        typewrite(bubble, text);
         return row;
+    }
+
+    // Word-by-word typewriter. Does NOT force scroll while typing, so the
+    // user can freely read from the top of the answer.
+    function typewrite(el, text) {
+        const html = formatAnswer(text);
+        // Tokenize the formatted HTML so we reveal it progressively without
+        // breaking tags. We split on whitespace but keep <...> tags intact.
+        const tokens = html.match(/<[^>]+>|[^<\s]+|\s+/g) || [html];
+        let i = 0;
+        el.innerHTML = '';
+        const step = () => {
+            if (i >= tokens.length) return;
+            // Append a few tokens at a time for a natural pace
+            const chunk = tokens.slice(i, i + 2).join('');
+            el.insertAdjacentHTML('beforeend', chunk);
+            i += 2;
+            setTimeout(step, 22);
+        };
+        step();
     }
 
     function addTyping() {
@@ -680,7 +722,6 @@
             if (chip) send(chip.dataset.q);
         });
         chatMessages.appendChild(row);
-        scrollBottom();
     }
 
     function addSource(source) {
@@ -703,7 +744,6 @@
                 </a>
             </div>`;
         chatMessages.appendChild(row);
-        scrollBottom();
     }
 
     function addVideo(url) {
@@ -731,7 +771,6 @@
                 </div>`;
         }
         chatMessages.appendChild(row);
-        scrollBottom();
     }
 
     function extractYouTubeId(url) {
