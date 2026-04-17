@@ -802,10 +802,6 @@
             if (data.image_url) addImage(data.image_url);
             if (data.video_url) addVideo(data.video_url);
 
-            if (data.citations && data.citations.length > 0) {
-                addSource(data.citations[0].title || data.citations[0]);
-            }
-
             if (data.suggestions && data.suggestions.length > 0) {
                 addSuggestions(data.suggestions.slice(0, 3));
             }
