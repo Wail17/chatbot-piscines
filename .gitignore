@@ -16,10 +16,12 @@ app/store/feedback/
 app/store/raw_docs/
 app/data/**
 
-# --- Réautoriser uniquement app/data/all/**
+# --- Réautoriser uniquement app/data/all/** et faq_images
 !app/data/
 !app/data/all/
 !app/data/all/**
+!app/data/faq_images/
+!app/data/faq_images/**
 
 # --- On ignorait pdf/docx partout dans app...
 app/**/*.pdf
