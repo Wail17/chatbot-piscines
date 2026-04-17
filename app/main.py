@@ -128,6 +128,7 @@ class ChatRequest(BaseModel):
     extra: Optional[Dict[str, Any]] = None
     top_k: int = 1  # Nombre de suggestions à retourner (1 = mode traditionnel, >1 = suggestions multiples)
     min_similarity: float = 0.3  # Score de similarité minimum (0-1)
+    language: Optional[str] = None  # Explicit language picked by user (nl/fr/en/de)
 
 class IngestRequest(BaseModel):
     path: str
@@ -2622,21 +2623,24 @@ def chat(req: ChatRequest, request: Request):
         except Exception as _pe:
             logger.debug(f"Preprocessor error: {_pe}")
 
-    lang_code = detect_language_code(q)
-    if not lang_code:
-        stored_lang = _language_for_ref(q)
-        if stored_lang:
-            lang_code = stored_lang
-    if clarify_ref and not lang_code:
-        lang_code = _language_for_ref(clarify_ref)
-    if not lang_code:
-        pending_lang = (_PENDING_BY_CLIENT.get(client_id) or {}).get("language") if client_id else None
-        if pending_lang:
-            lang_code = pending_lang
-    if not lang_code:
-        # Default to English for the expert path (Claude itself picks the right
-        # language from conversation history — this is just the analytics label).
-        lang_code = "en"
+    # 1. Explicit language picked by the user in the UI always wins.
+    explicit_lang = (getattr(req, "language", None) or "").strip().lower()
+    if explicit_lang in {"nl", "fr", "en", "de"}:
+        lang_code = explicit_lang
+    else:
+        lang_code = detect_language_code(q)
+        if not lang_code:
+            stored_lang = _language_for_ref(q)
+            if stored_lang:
+                lang_code = stored_lang
+        if clarify_ref and not lang_code:
+            lang_code = _language_for_ref(clarify_ref)
+        if not lang_code:
+            pending_lang = (_PENDING_BY_CLIENT.get(client_id) or {}).get("language") if client_id else None
+            if pending_lang:
+                lang_code = pending_lang
+        if not lang_code:
+            lang_code = "en"
 
     # ── Track this question in analytics ────────────────────────────────────
     if q:

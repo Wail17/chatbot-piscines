@@ -381,10 +381,14 @@ def expert_answer(
     if not context:
         return {**empty, "error": "empty_faq_context"}
 
-    # NOTE: we no longer force a target language via Python — Claude reads the
-    # conversation history and picks the right language itself (see LANGUAGE RULE
-    # in the base prompt). lang_code stays available for analytics / legacy paths.
-    system_prompt = _EXPERT_SYSTEM_BASE
+    # When the user explicitly picks a language in the UI, the backend passes
+    # that lang_code here and we hard-lock Claude to it. Otherwise Claude
+    # infers the right language from conversation history.
+    system_prompt = _EXPERT_SYSTEM_BASE + (
+        f"\n\nUI LANGUAGE LOCK: the user has explicitly selected {target_lang} "
+        f"as their language. Always respond in {target_lang}, regardless of what "
+        f"language the conversation drifts toward."
+    )
 
     try:
         resp = anthropic_client.messages.create(
