@@ -388,7 +388,6 @@ def expert_answer(
                 },
             ],
             messages=_build_expert_messages(question, history),
-            timeout=45.0,
         )
         raw = resp.content[0].text if resp.content else ""
     except Exception as e:
