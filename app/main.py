@@ -2598,6 +2598,16 @@ def chat(req: ChatRequest, request: Request):
             logger.debug(f"Preprocessor error: {_pe}")
 
     lang_code = detect_language_code(q)
+    # For short follow-ups in a conversation (e.g. "Gen 2", "oui"), detection is
+    # unreliable — inherit the language from the first user message in history.
+    if client_id:
+        hist = _get_history(client_id)
+        if hist:
+            first_user = next((h["content"] for h in hist if h.get("role") == "user" and (h.get("content") or "").strip()), None)
+            if first_user:
+                hist_lang = detect_language_code(first_user)
+                if hist_lang and (not lang_code or len(q.strip()) < 20):
+                    lang_code = hist_lang
     if not lang_code:
         stored_lang = _language_for_ref(q)
         if stored_lang:
