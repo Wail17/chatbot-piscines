@@ -311,6 +311,39 @@
             40%            { transform: translateY(-6px); opacity: 1; }
         }
 
+        /* ── Choice buttons (Gen 1 / Gen 2, disambiguation…) ─ */
+        .choices-row {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 6px;
+            padding-left: 42px;
+            padding-right: 4px;
+        }
+        .choice-chip {
+            background: white;
+            color: var(--ocean-700);
+            border: 1.5px solid rgba(14,122,196,0.35);
+            border-radius: 14px;
+            padding: 11px 16px;
+            font-size: 13.5px;
+            font-weight: 600;
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+            transition: transform .15s, box-shadow .2s, background .2s, color .2s, border-color .2s;
+            box-shadow: 0 1px 2px rgba(10,45,80,0.05);
+            line-height: 1.4;
+        }
+        .choice-chip:hover {
+            background: linear-gradient(135deg, var(--ocean-500), var(--ocean-400));
+            color: white;
+            border-color: transparent;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(14,122,196,0.35);
+        }
+        .choice-chip:active { transform: translateY(0); }
+
         /* ── Suggestion chips after answers ───────────────── */
         .suggestions-row {
             display: flex;
@@ -710,6 +743,24 @@
         if (el) el.remove();
     }
 
+    // Primary clickable choice buttons — used when the bot asks the user
+    // to pick between options (e.g. "Gen 1 / Gen 2") or lists alternative
+    // questions for disambiguation. More prominent than the subtle
+    // follow-up suggestion chips.
+    function addChoices(options) {
+        if (!options || !options.length) return;
+        const row = document.createElement('div');
+        row.className = 'choices-row';
+        row.innerHTML = options.map(opt =>
+            `<button class="choice-chip" data-q="${escAttr(opt)}" type="button">${escHtml(opt)}</button>`
+        ).join('');
+        row.addEventListener('click', e => {
+            const chip = e.target.closest('.choice-chip');
+            if (chip) send(chip.dataset.q);
+        });
+        chatMessages.appendChild(row);
+    }
+
     function addSuggestions(suggestions) {
         if (!suggestions || !suggestions.length) return;
         const row = document.createElement('div');
@@ -840,6 +891,16 @@
 
             if (data.image_url) addImage(data.image_url);
             if (data.video_url) addVideo(data.video_url);
+
+            // Inline choice buttons (e.g. "Gen 1 / Gen 2 / Gen 3")
+            if (data.choices && data.choices.length > 0) {
+                addChoices(data.choices);
+            }
+
+            // Disambiguation alternatives ("Do you mean: 1) ... 2) ...")
+            if (data.clarify && data.clarify.options && data.clarify.options.length > 0) {
+                addChoices(data.clarify.options);
+            }
 
             if (data.suggestions && data.suggestions.length > 0) {
                 addSuggestions(data.suggestions.slice(0, 3));

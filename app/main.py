@@ -2686,6 +2686,12 @@ def chat(req: ChatRequest, request: Request):
                 alt_qs = ex.get("alternative_questions") or []
                 if ex.get("ambiguous") and alt_qs:
                     response["clarify"] = {"ref": q, "options": alt_qs, "tips": []}
+                # Propagate inline choice buttons (e.g. ["Gen 1", "Gen 2"])
+                choices = ex.get("choices") or []
+                if isinstance(choices, list):
+                    choices = [str(c).strip() for c in choices if str(c).strip()][:6]
+                    if choices:
+                        response["choices"] = choices
                 result = _add_suggestions_to_response(response, q, lang_code, matched_row)
                 _append_history(client_id, "user", q)
                 _append_history(client_id, "assistant", ex_answer)

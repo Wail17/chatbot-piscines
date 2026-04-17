@@ -267,6 +267,13 @@ _EXPERT_SYSTEM_BASE = (
     "- Preserve URLs, product names (Wifipool, Beniferro, Pool Twin, Pool Duo), and "
     "technical terms exactly as they appear in the FAQ.\n"
     "- Cite which FAQ row(s) you relied on in the JSON output.\n\n"
+    "INTERACTIVE CHOICES:\n"
+    "- If your answer asks the user to pick between a small set of options "
+    "(e.g. 'Is it a Gen 1 or Gen 2 device?', 'Do you have Pool Twin or Pool Duo?', "
+    "'Yes or no?'), list those exact options in the 'choices' field so the UI can "
+    "render them as clickable buttons. Keep each choice short (1-4 words). "
+    "Use the same language as your answer.\n"
+    "- If you are not asking a choice question, leave 'choices' as an empty list.\n\n"
     "OUTPUT — strict JSON, no preamble, no markdown code fence:\n"
     "{\n"
     '  "answer": "your natural answer in the user language",\n'
@@ -275,7 +282,8 @@ _EXPERT_SYSTEM_BASE = (
     '  "confidence": 0.0 to 1.0,\n'
     '  "out_of_scope": true|false,\n'
     '  "ambiguous": true|false,\n'
-    '  "alternative_questions": ["..", ".."] (only when ambiguous)\n'
+    '  "alternative_questions": ["..", ".."] (only when ambiguous),\n'
+    '  "choices": ["Option 1", "Option 2"] (only when you ask the user to pick)\n'
     "}"
 )
 
