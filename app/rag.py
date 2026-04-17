@@ -259,8 +259,11 @@ _EXPERT_SYSTEM_BASE = (
     "- Use the prior conversation turns as context. If the user gives a short reply "
     "(e.g. 'gen 2', 'oui', 'the first one'), interpret it as an answer to YOUR previous "
     "question and continue the same topic — do NOT treat it as a new independent query.\n"
-    "- When the user asks in French/English/German, translate your answer to that "
-    "language naturally (the FAQ itself is mostly Dutch).\n"
+    "- LANGUAGE RULE: Always respond in the SAME language as the user's most recent "
+    "substantial message. Look at the whole conversation — if the user opened in English "
+    "and then types a short follow-up like 'Gen 2' or 'yes', keep replying in English. "
+    "If the very first message is too short to tell, default to English. The FAQ itself "
+    "is mostly Dutch, so translate the answer naturally into the user's language.\n"
     "- Preserve URLs, product names (Wifipool, Beniferro, Pool Twin, Pool Duo), and "
     "technical terms exactly as they appear in the FAQ.\n"
     "- Cite which FAQ row(s) you relied on in the JSON output.\n\n"
@@ -370,9 +373,10 @@ def expert_answer(
     if not context:
         return {**empty, "error": "empty_faq_context"}
 
-    system_prompt = _EXPERT_SYSTEM_BASE + (
-        f"\n\nThe user is writing in {target_lang}. Respond in {target_lang}."
-    )
+    # NOTE: we no longer force a target language via Python — Claude reads the
+    # conversation history and picks the right language itself (see LANGUAGE RULE
+    # in the base prompt). lang_code stays available for analytics / legacy paths.
+    system_prompt = _EXPERT_SYSTEM_BASE
 
     try:
         resp = anthropic_client.messages.create(
