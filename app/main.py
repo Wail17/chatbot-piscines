@@ -2232,6 +2232,14 @@ def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
 # ---------------------------------------------------------------------
 @app.get("/health")
 def health():
+    try:
+        from .rag import anthropic_client as _ac, _EXPERT_MODEL
+        anthropic_ready = _ac is not None
+        expert_model = _EXPERT_MODEL
+    except Exception:
+        anthropic_ready = False
+        expert_model = None
+    anthropic_key_present = bool(os.environ.get("ANTHROPIC_API_KEY"))
     info: Dict[str, Any] = {
         "status": "ok",
         "faq_rows": len(_FAQ),
@@ -2242,6 +2250,9 @@ def health():
             "analytics": _ANALYTICS_AVAILABLE,
             "query_preprocessor": _PREPROCESSOR_AVAILABLE,
             "direct_answer": _DIRECT_ANSWER_AVAILABLE,
+            "anthropic_ready": anthropic_ready,
+            "anthropic_key_present": anthropic_key_present,
+            "expert_model": expert_model,
         },
     }
     if _ANALYTICS_AVAILABLE:
