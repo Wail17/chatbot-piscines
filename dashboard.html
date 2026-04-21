@@ -1454,13 +1454,9 @@
         <span class="nav-icon">📊</span>
         <span>Overzicht</span>
       </div>
-      <div class="nav-item" onclick="showSection('faq')" id="nav-faq">
-        <span class="nav-icon">💬</span>
-        <span>FAQ Beheer</span>
-      </div>
       <div class="nav-item" onclick="showSection('gaps')" id="nav-gaps">
-        <span class="nav-icon">⭐</span>
-        <span>FAQ Intelligence</span>
+        <span class="nav-icon">❓</span>
+        <span>Ontbrekende vragen</span>
         <span class="nav-badge" id="nav-gaps-badge" style="display:none">!</span>
       </div>
     </nav>
@@ -1563,39 +1559,12 @@
       </div>
 
       <!-- ─────────────────────────────────────────────────
-           SECTION: FAQ Beheer
-      ───────────────────────────────────────────────── -->
-      <div class="section" id="section-faq">
-        <div class="section-header">
-          <h2>FAQ Beheer</h2>
-          <p>Maak, bewerk en verwijder kennisbank-items</p>
-        </div>
-
-        <div class="faq-toolbar">
-          <div class="faq-search">
-            <span class="faq-search-icon">🔍</span>
-            <input type="text" id="faq-search-input" placeholder="Zoek een vraag, antwoord of categorie…" oninput="onSearchInput()" />
-          </div>
-          <button class="btn btn-primary" onclick="openCreateModal()">
-            <span>＋</span> Nieuwe FAQ
-          </button>
-          <span class="faq-count" id="faq-count-label"></span>
-        </div>
-
-        <div class="table-wrap" id="faq-table-wrap">
-          <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
-        </div>
-
-        <div id="faq-pagination"></div>
-      </div>
-
-      <!-- ─────────────────────────────────────────────────
-           SECTION: FAQ Intelligence
+           SECTION: Ontbrekende vragen
       ───────────────────────────────────────────────── -->
       <div class="section" id="section-gaps">
         <div class="section-header">
-          <h2>FAQ Intelligence ⭐</h2>
-          <p>Onbeantwoorde vragen gedetecteerd door de chatbot</p>
+          <h2>Ontbrekende vragen ❓</h2>
+          <p>Vragen van uw klanten waarop de chatbot geen antwoord had</p>
         </div>
 
         <div class="gap-banner">
@@ -1827,8 +1796,7 @@ const API = {
 /* ─── Navigation ──────────────────────────────────────────── */
 const SECTION_TITLES = {
   overview: 'Overzicht',
-  faq: 'FAQ Beheer',
-  gaps: 'FAQ Intelligence ⭐'
+  gaps: 'Ontbrekende vragen ❓'
 };
 
 function showSection(name) {
@@ -1842,7 +1810,6 @@ function showSection(name) {
   currentSection = name;
 
   if (name === 'overview') loadOverview();
-  if (name === 'faq') loadFaqManager();
   if (name === 'gaps') loadGaps();
 }
 
@@ -2433,7 +2400,11 @@ async function loadGaps() {
 }
 
 function addGapToFaq(question) {
-  openCreateModal(question);
+  openQuickAdd();
+  setTimeout(() => {
+    const q = document.getElementById('qa-question');
+    if (q) { q.value = question || ''; q.focus(); }
+  }, 80);
 }
 
 /* ─── Utils ───────────────────────────────────────────────── */
