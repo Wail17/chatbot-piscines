@@ -1276,10 +1276,6 @@
         <span class="nav-icon">📊</span>
         <span>Overzicht</span>
       </div>
-      <div class="nav-item" onclick="showSection('stats')" id="nav-stats">
-        <span class="nav-icon">📈</span>
-        <span>Statistieken</span>
-      </div>
       <div class="nav-item" onclick="showSection('faq')" id="nav-faq">
         <span class="nav-icon">💬</span>
         <span>FAQ Beheer</span>
@@ -1340,131 +1336,21 @@
           </div>
         </div>
 
-        <!-- Hero row: most used language + total questions with trend -->
-        <div class="hero-grid">
-          <div class="hero-card lang">
-            <div class="hero-kicker">🌐 Meest gebruikte taal</div>
-            <div class="hero-big"><span id="hero-lang-code">—</span><span class="unit" id="hero-lang-pct"></span></div>
-            <div class="hero-sub" id="hero-lang-sub">Verdeling over de 4 talen</div>
-            <div class="lang-bars" id="hero-lang-bars"></div>
-          </div>
-          <div class="hero-card">
-            <div class="hero-kicker">💬 Vragen (7d)</div>
-            <div class="hero-big">
-              <span id="hero-total-q">—</span>
-              <span class="trend-chip flat" id="hero-trend">·</span>
-            </div>
-            <div class="hero-sub" id="hero-total-sub">vs vorige 7 dagen</div>
-
-            <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:10px;margin-top:18px;margin-bottom:0;">
-              <div class="stat-card" style="padding:14px 16px;">
-                <div class="stat-card-header">
-                  <span class="stat-label">Antwoord%</span>
-                  <div class="stat-icon">✅</div>
-                </div>
-                <div class="stat-value" id="stat-answer-rate" style="font-size:22px;">—</div>
-              </div>
-              <div class="stat-card" style="padding:14px 16px;">
-                <div class="stat-card-header">
-                  <span class="stat-label">FAQ items</span>
-                  <div class="stat-icon">📚</div>
-                </div>
-                <div class="stat-value" id="stat-faq-count" style="font-size:22px;">—</div>
-              </div>
-            </div>
-          </div>
+        <!-- Language card -->
+        <div class="hero-card lang" style="margin-bottom:20px;">
+          <div class="hero-kicker">🌐 Meest gebruikte taal</div>
+          <div class="hero-big"><span id="hero-lang-code">—</span><span class="unit" id="hero-lang-pct"></span></div>
+          <div class="hero-sub" id="hero-lang-sub">Nog geen data</div>
+          <div class="lang-bars" id="hero-lang-bars"></div>
         </div>
 
-        <!-- Top questions (full width) -->
-        <div class="chart-card" style="margin-bottom:20px;">
+        <!-- Top questions -->
+        <div class="chart-card" style="margin-bottom:0;">
           <div class="chart-card-header">
             <span class="chart-card-title">🔥 Meest gestelde vragen</span>
             <span style="font-size:12px;color:var(--text-secondary);">Klik om te kopiëren</span>
           </div>
           <div id="overview-top-q">
-            <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
-          </div>
-        </div>
-
-        <!-- Split: hit rate donut + gaps list -->
-        <div class="split-grid">
-          <div class="chart-card">
-            <div class="chart-card-header">
-              <span class="chart-card-title">🎯 Antwoord-succesratio</span>
-            </div>
-            <div class="chart-wrap" style="height:220px;">
-              <canvas id="chart-hitrate"></canvas>
-            </div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-card-header">
-              <span class="chart-card-title">🔍 Vragen zonder antwoord</span>
-              <span id="overview-gaps-count" style="font-size:12px;color:var(--text-secondary);"></span>
-            </div>
-            <div id="overview-gaps-list">
-              <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Activity graph (full width) -->
-        <div class="chart-card" style="margin-bottom:0;">
-          <div class="chart-card-header">
-            <span class="chart-card-title">📈 Activiteit — 7 dagen</span>
-          </div>
-          <div class="chart-wrap" style="height:220px;">
-            <canvas id="chart-overview-bar"></canvas>
-          </div>
-        </div>
-
-        <!-- Hidden stat kept for backwards compat with JS -->
-        <span id="stat-questions" style="display:none;"></span>
-        <span id="stat-lang" style="display:none;"></span>
-      </div>
-
-      <!-- ─────────────────────────────────────────────────
-           SECTION: Statistiques
-      ───────────────────────────────────────────────── -->
-      <div class="section" id="section-stats">
-        <div class="section-header">
-          <h2>Statistieken</h2>
-          <p>Gedetailleerde analyse van de chatbot activiteit</p>
-        </div>
-
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-          <div class="period-pills">
-            <button class="period-pill" onclick="setPeriod(1)">Vandaag</button>
-            <button class="period-pill active" onclick="setPeriod(7)">Week</button>
-            <button class="period-pill" onclick="setPeriod(30)">Maand</button>
-            <button class="period-pill" onclick="setPeriod(365)">Jaar</button>
-          </div>
-          <span id="stats-period-label" style="font-size:12px;color:var(--text-secondary);"></span>
-        </div>
-
-        <div class="charts-grid">
-          <div class="chart-card">
-            <div class="chart-card-header">
-              <span class="chart-card-title">Dagelijkse activiteit</span>
-            </div>
-            <div class="chart-wrap" style="height:240px;">
-              <canvas id="chart-daily"></canvas>
-            </div>
-          </div>
-          <div class="chart-card">
-            <div class="chart-card-header">
-              <span class="chart-card-title">Taaldistributie</span>
-            </div>
-            <div class="chart-wrap" style="height:240px;">
-              <canvas id="chart-lang"></canvas>
-            </div>
-          </div>
-        </div>
-
-        <div class="chart-card">
-          <div class="chart-card-header">
-            <span class="chart-card-title">Top 10 gestelde vragen</span>
-          </div>
-          <div id="top-q-container">
             <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
           </div>
         </div>
@@ -1687,7 +1573,6 @@ const API = {
 /* ─── Navigation ──────────────────────────────────────────── */
 const SECTION_TITLES = {
   overview: 'Overzicht',
-  stats: 'Statistiques',
   faq: 'FAQ Beheer',
   gaps: 'FAQ Intelligence ⭐'
 };
@@ -1703,7 +1588,6 @@ function showSection(name) {
   currentSection = name;
 
   if (name === 'overview') loadOverview();
-  if (name === 'stats') loadStats(currentPeriod);
   if (name === 'faq') loadFaqManager();
   if (name === 'gaps') loadGaps();
 }
@@ -1777,51 +1661,9 @@ const LANG_LABELS = { en: 'English', nl: 'Nederlands', fr: 'Français', de: 'Deu
 /* ─── Overview ────────────────────────────────────────────── */
 async function loadOverview() {
   try {
-    const [analytics7, analytics14, faqData, gapsData] = await Promise.all([
-      API.get('/analytics?days=7'),
-      API.get('/analytics?days=14').catch(() => ({})),
-      API.get('/admin/faq').catch(() => ({ count: 0 })),
-      API.get('/faq/gaps?min_count=1').catch(() => ({ gaps: [] }))
-    ]);
-
-    const summary = analytics7.summary || {};
-    const totalQ = summary.total_questions || 0;
-    const answerRate = summary.answer_rate_pct || 0;
-    const faqCount = faqData.count || (Array.isArray(faqData) ? faqData.length : 0);
-
-    // Trend: compare last 7 days vs previous 7 (total_14 - total_7)
-    const total14 = (analytics14.summary || {}).total_questions || 0;
-    const prev7 = Math.max(0, total14 - totalQ);
-    const trendEl = document.getElementById('hero-trend');
-    if (prev7 === 0 && totalQ === 0) {
-      trendEl.className = 'trend-chip flat'; trendEl.textContent = '—';
-    } else if (prev7 === 0) {
-      trendEl.className = 'trend-chip up'; trendEl.textContent = 'NEW';
-    } else {
-      const diffPct = Math.round(((totalQ - prev7) / prev7) * 100);
-      if (diffPct > 2) { trendEl.className = 'trend-chip up'; trendEl.textContent = `▲ ${diffPct}%`; }
-      else if (diffPct < -2) { trendEl.className = 'trend-chip down'; trendEl.textContent = `▼ ${Math.abs(diffPct)}%`; }
-      else { trendEl.className = 'trend-chip flat'; trendEl.textContent = '± 0%'; }
-    }
-
-    animateCount(document.getElementById('hero-total-q'), totalQ);
-    animateCount(document.getElementById('stat-answer-rate'), parseFloat(answerRate.toFixed(1)), '%');
-    animateCount(document.getElementById('stat-faq-count'), faqCount);
-
-    // Language hero
-    renderLangHero(analytics7.language_distribution || {});
-
-    // Top questions
-    renderOverviewTopQuestions(analytics7.top_questions || []);
-
-    // Hit rate donut
-    renderHitRateDonut(summary);
-
-    // Gaps list
-    renderOverviewGaps(gapsData.gaps || []);
-
-    // Activity chart
-    renderOverviewActivity(analytics7.daily_activity || {});
+    const analytics = await API.get('/analytics?days=7');
+    renderLangHero(analytics.language_distribution || {});
+    renderOverviewTopQuestions(analytics.top_questions || []);
   } catch (e) {
     console.warn('Overview load error:', e);
     if (String(e && e.message) !== 'Unauthorized') {
@@ -1894,238 +1736,6 @@ function copyQuestion(q) {
     navigator.clipboard.writeText(q);
     showToast('Vraag gekopieerd', 'success');
   } catch(e) { /* ignore */ }
-}
-
-function renderHitRateDonut(summary) {
-  const answered = summary.answered || summary.total_answered || 0;
-  const total = summary.total_questions || 0;
-  const missed = Math.max(0, total - answered);
-  if (charts.hitrate) charts.hitrate.destroy();
-  const ctx = document.getElementById('chart-hitrate');
-  if (!ctx) return;
-  const c2d = ctx.getContext('2d');
-  if (total === 0) {
-    c2d.clearRect(0, 0, ctx.width, ctx.height);
-    c2d.font = '600 13px Inter';
-    c2d.fillStyle = '#5e7891';
-    c2d.textAlign = 'center';
-    c2d.fillText('Nog geen data', ctx.width/2, ctx.height/2);
-    return;
-  }
-  const pct = Math.round((answered / total) * 100);
-  charts.hitrate = new Chart(c2d, {
-    type: 'doughnut',
-    data: {
-      labels: ['Beantwoord', 'Niet beantwoord'],
-      datasets: [{
-        data: [answered, missed],
-        backgroundColor: ['#0e7ac4', '#e3edf4'],
-        borderWidth: 0,
-        hoverOffset: 4
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      cutout: '72%',
-      plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 10, boxWidth: 10 } },
-        tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } }
-      }
-    },
-    plugins: [{
-      id: 'centerText',
-      afterDraw(chart) {
-        const { ctx, chartArea } = chart;
-        if (!chartArea) return;
-        ctx.save();
-        ctx.font = '800 28px Inter';
-        ctx.fillStyle = '#0c2438';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const cx = (chartArea.left + chartArea.right) / 2;
-        const cy = (chartArea.top + chartArea.bottom) / 2;
-        ctx.fillText(pct + '%', cx, cy);
-        ctx.restore();
-      }
-    }]
-  });
-}
-
-function renderOverviewGaps(gaps) {
-  const countEl = document.getElementById('overview-gaps-count');
-  const listEl = document.getElementById('overview-gaps-list');
-  countEl.textContent = gaps.length ? `${gaps.length} totaal` : '';
-  if (!gaps.length) {
-    listEl.innerHTML = '<div class="empty-state" style="padding:20px 0;"><div class="empty-state-icon">🎉</div><div class="empty-state-text">Geen gaps gedetecteerd.</div></div>';
-    return;
-  }
-  const top5 = gaps.slice(0, 5);
-  listEl.innerHTML = `<div class="gap-list">
-    ${top5.map(g => {
-      const q = g.question || g.text || g.q || '';
-      const c = g.count || g.hits || 1;
-      return `<div class="gap-item" onclick="copyQuestion(${JSON.stringify(q).replace(/"/g, '&quot;')})" title="Klik om te kopiëren">
-        <div class="gap-text">${escHtml(q)}</div>
-        <div class="gap-pill">×${c}</div>
-      </div>`;
-    }).join('')}
-  </div>`;
-}
-
-function renderOverviewActivity(daily) {
-  const sortedDates = Object.keys(daily).sort();
-  const labels = sortedDates.map(d => d.slice(5));
-  const data = sortedDates.map(d => daily[d]);
-  if (charts.overviewBar) charts.overviewBar.destroy();
-  const ctxEl = document.getElementById('chart-overview-bar');
-  if (!ctxEl) return;
-  const ctx = ctxEl.getContext('2d');
-  const gradient = ctx.createLinearGradient(0, 0, 0, 220);
-  gradient.addColorStop(0, 'rgba(14,122,196,0.55)');
-  gradient.addColorStop(1, 'rgba(14,122,196,0.05)');
-  charts.overviewBar = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Questions',
-        data,
-        borderColor: '#0e7ac4',
-        backgroundColor: gradient,
-        fill: true,
-        tension: 0.35,
-        borderWidth: 2.5,
-        pointRadius: 4,
-        pointBackgroundColor: '#fff',
-        pointBorderColor: '#0e7ac4',
-        pointBorderWidth: 2,
-        pointHoverRadius: 6
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} vragen` } } },
-      scales: {
-        x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#5e7891' } },
-        y: { grid: { color: '#e3edf4' }, ticks: { font: { size: 11 }, color: '#5e7891' }, beginAtZero: true }
-      }
-    }
-  });
-}
-
-/* ─── Stats ───────────────────────────────────────────────── */
-function setPeriod(days) {
-  currentPeriod = days;
-  document.querySelectorAll('.period-pill').forEach(p => p.classList.remove('active'));
-  const map = { 1: 0, 7: 1, 30: 2, 365: 3 };
-  const pills = document.querySelectorAll('.period-pill');
-  if (pills[map[days]]) pills[map[days]].classList.add('active');
-  loadStats(days);
-}
-
-async function loadStats(days) {
-  const label = { 1: 'Vandaag', 7: 'Deze week', 30: 'Deze maand', 365: 'Dit jaar' };
-  const el = document.getElementById('stats-period-label');
-  if (el) el.textContent = label[days] || `${days} jours`;
-
-  try {
-    const analytics = await API.get(`/analytics?days=${days}`);
-    const daily = analytics.daily_activity || {};
-    const langDist = analytics.language_distribution || {};
-    const topQ = analytics.top_questions || [];
-
-    // Bar chart – daily (daily_activity is an object: {"2026-03-30": 5})
-    const sortedDates = Object.keys(daily).sort();
-    const labels = sortedDates.map(d => d.slice(5));
-    const data = sortedDates.map(d => daily[d]);
-
-    if (charts.daily) { charts.daily.destroy(); }
-    const ctxD = document.getElementById('chart-daily').getContext('2d');
-    charts.daily = new Chart(ctxD, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Questions',
-          data,
-          backgroundColor: 'rgba(14,122,196,0.75)',
-          hoverBackgroundColor: '#0e7ac4',
-          borderRadius: 5,
-          borderSkipped: false
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y} questions` } } },
-        scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#9ca3af', maxRotation: 45 } },
-          y: { grid: { color: '#f3f4f6' }, ticks: { font: { size: 11 }, color: '#9ca3af' }, beginAtZero: true }
-        }
-      }
-    });
-
-    // Doughnut – languages
-    const langKeys = Object.keys(langDist);
-    const langVals = Object.values(langDist);
-
-    if (charts.lang) { charts.lang.destroy(); }
-    const ctxL = document.getElementById('chart-lang').getContext('2d');
-    if (langKeys.length > 0) {
-      charts.lang = new Chart(ctxL, {
-        type: 'doughnut',
-        data: {
-          labels: langKeys,
-          datasets: [{
-            data: langVals,
-            backgroundColor: CHART_COLORS,
-            borderWidth: 2,
-            borderColor: '#fff',
-            hoverOffset: 6
-          }]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: {
-            legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 12, boxWidth: 12 } },
-            tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } }
-          },
-          cutout: '62%'
-        }
-      });
-    } else {
-      ctxL.canvas.parentNode.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🌐</div><div class="empty-state-text">Geen taaldata beschikbaar</div></div>';
-    }
-
-    // Top questions
-    renderTopQuestions(topQ);
-
-  } catch (e) {
-    console.warn('Stats load error:', e);
-    showToast('Kan statistieken niet laden', 'error');
-  }
-}
-
-function renderTopQuestions(topQ) {
-  const container = document.getElementById('top-q-container');
-  if (!topQ || topQ.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📭</div><div class="empty-state-title">Geen vragen</div><div class="empty-state-text">Geen data beschikbaar voor deze periode.</div></div>';
-    return;
-  }
-  const maxCount = Math.max(...topQ.map(q => q.count || 0)) || 1;
-  const top10 = topQ.slice(0, 10);
-  const html = `<div class="top-q-list">
-    ${top10.map((q, i) => `
-      <div class="top-q-item">
-        <div class="top-q-rank">${i + 1}</div>
-        <div class="top-q-body">
-          <div class="top-q-text" title="${escHtml(q.question || q.text || '')}">${escHtml(q.question || q.text || '—')}</div>
-          <div class="top-q-bar-wrap"><div class="top-q-bar" style="width:${Math.round(((q.count||0)/maxCount)*100)}%"></div></div>
-        </div>
-        <div class="top-q-count">${q.count || 0}</div>
-      </div>
-    `).join('')}
-  </div>`;
-  container.innerHTML = html;
 }
 
 /* ─── FAQ Manager ─────────────────────────────────────────── */
