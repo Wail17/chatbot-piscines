@@ -384,7 +384,7 @@ if _ANALYTICS_AVAILABLE:
 # Simple in-memory rate limiter (per IP, no external deps)
 # ─────────────────────────────────────────────────────────────────────────────
 _RATE_LIMIT_WINDOW = 60      # seconds
-_RATE_LIMIT_MAX = 30         # requests per window per IP
+_RATE_LIMIT_MAX = 60         # requests per window per IP
 _rate_store: Dict[str, List[float]] = {}
 _rate_lock = Lock()
 
