@@ -1228,12 +1228,190 @@
       min-height: 18px;
     }
 
+    /* ── Kennisbank cards (Option 1 / Option 2) ────────────── */
+    .kb-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    .kb-card {
+      position: relative;
+      background: rgba(255,255,255,0.82);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      padding: 26px 28px 24px;
+      box-shadow: var(--shadow-md);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .kb-badge {
+      align-self: flex-start;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #fff;
+      background: linear-gradient(135deg, var(--ocean-500), var(--ocean-400));
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .kb-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--text-primary);
+    }
+    .kb-desc {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+    .kb-desc b { color: var(--text-primary); font-weight: 700; }
+    .kb-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .kb-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: transform var(--transition), box-shadow var(--transition), background var(--transition);
+      text-decoration: none;
+    }
+    .kb-btn.primary {
+      background: linear-gradient(135deg, var(--ocean-500), var(--ocean-400));
+      color: #fff;
+      box-shadow: 0 8px 20px rgba(14,122,196,0.30);
+    }
+    .kb-btn.primary:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(14,122,196,0.40); }
+    .kb-btn.secondary {
+      background: #fff;
+      color: var(--ocean-600);
+      border: 1.5px solid var(--ocean-200);
+    }
+    .kb-btn.secondary:hover { background: var(--ocean-50); border-color: var(--ocean-500); }
+    .kb-hint {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+
+    /* ── Quick-add modal ───────────────────────────────────── */
+    .qa-overlay {
+      position: fixed; inset: 0;
+      background: rgba(12,36,56,0.55);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      z-index: 9998;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .qa-overlay.open { display: flex; animation: fadeIn 0.2s ease; }
+    .qa-modal {
+      background: #fff;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 560px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 28px 30px;
+      box-shadow: 0 30px 80px rgba(12,36,56,0.35);
+    }
+    .qa-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 6px;
+    }
+    .qa-head h3 {
+      font-size: 20px;
+      font-weight: 800;
+      color: var(--text-primary);
+    }
+    .qa-close {
+      background: transparent; border: 0; color: var(--text-secondary);
+      font-size: 22px; line-height: 1; cursor: pointer; padding: 4px 8px;
+      border-radius: 8px;
+    }
+    .qa-close:hover { background: var(--bg-page); color: var(--text-primary); }
+    .qa-sub {
+      color: var(--text-secondary);
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+    .qa-field { margin-bottom: 14px; }
+    .qa-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+    .qa-label .req { color: var(--danger); }
+    .qa-label .opt { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+    .qa-input, .qa-textarea {
+      width: 100%;
+      padding: 11px 14px;
+      font-size: 14px;
+      font-family: inherit;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color var(--transition), box-shadow var(--transition);
+    }
+    .qa-input:focus, .qa-textarea:focus {
+      border-color: var(--ocean-500);
+      box-shadow: 0 0 0 3px rgba(14,122,196,0.12);
+    }
+    .qa-textarea { resize: vertical; min-height: 110px; }
+    .qa-file-box {
+      padding: 10px 14px;
+      border: 1.5px dashed var(--ocean-200);
+      border-radius: 10px;
+      background: var(--ocean-50);
+      color: var(--ocean-600);
+      font-size: 13px;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .qa-file-box:hover { background: var(--ocean-100); }
+    .qa-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 22px;
+    }
+    .qa-footer-note {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
     /* ── Responsive hint ───────────────────────────────────── */
     @media (max-width: 900px) {
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .charts-grid { grid-template-columns: 1fr; }
       .hero-grid { grid-template-columns: 1fr; }
       .split-grid { grid-template-columns: 1fr; }
+      .kb-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -1319,20 +1497,48 @@
            SECTION: Vue d'ensemble
       ───────────────────────────────────────────────── -->
       <div class="section active" id="section-overview">
-        <div class="section-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
-          <div>
-            <h2>Overzicht</h2>
-            <p>Samenvatting van de chatbot prestaties van de afgelopen 7 dagen</p>
+        <div class="section-header">
+          <h2>Overzicht</h2>
+          <p>Samenvatting van de chatbot prestaties van de afgelopen 7 dagen</p>
+        </div>
+
+        <!-- ═══ Kennisbank beheren ═══ -->
+        <div class="kb-grid">
+
+          <!-- Optie 1 — Snelle toevoeging -->
+          <div class="kb-card">
+            <div class="kb-badge">Optie 1</div>
+            <div class="kb-title">➕ Snel een vraag toevoegen</div>
+            <div class="kb-desc">
+              Perfect om <b>1 tot 5 vragen</b> toe te voegen.
+              De chatbot leert meteen en gebruikt jouw antwoord direct.
+              Je kan ook een <b>foto</b> of een <b>video (YouTube-link)</b> meegeven.
+            </div>
+            <button class="kb-btn primary" onclick="openQuickAdd()">
+              <span>➕</span> Nieuwe vraag toevoegen
+            </button>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button id="btn-reload-excel" onclick="reloadFromExcel(false)" title="Snel: laad Excel zonder LLM-opkuis"
-              style="padding:10px 18px;background:#4f46e5;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
-              🔄 <span>Excel opnieuw laden</span>
-            </button>
-            <button id="btn-reload-excel-polish" onclick="reloadFromExcel(true)" title="Traag: laad Excel en kuis typfouten en grammatica op met AI"
-              style="padding:10px 18px;background:#059669;color:#fff;border:0;border-radius:8px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:8px;">
-              ✨ <span>Excel + AI opkuis</span>
-            </button>
+
+          <!-- Optie 2 — Excel bulk -->
+          <div class="kb-card">
+            <div class="kb-badge">Optie 2</div>
+            <div class="kb-title">📊 Veel vragen tegelijk bewerken</div>
+            <div class="kb-desc">
+              Voor <b>grote wijzigingen</b>: download het Excel-bestand,
+              bewerk het op je computer in Excel (voeg vragen toe, verbeter antwoorden,
+              plak vertalingen of afbeeldingen), en upload het daarna opnieuw.
+              De chatbot leert meteen uit het nieuwe bestand.
+            </div>
+            <div class="kb-actions">
+              <button class="kb-btn primary" onclick="downloadExcel()">
+                <span>📥</span> Excel downloaden
+              </button>
+              <label class="kb-btn secondary" for="excel-upload-input">
+                <span>📤</span> Excel uploaden
+              </label>
+              <input type="file" id="excel-upload-input" accept=".xlsx" style="display:none;" onchange="uploadExcel(this)" />
+            </div>
+            <div class="kb-hint">💡 Tip: maak een kopie van het bestand voordat je wijzigingen maakt.</div>
           </div>
         </div>
 
@@ -1473,6 +1679,54 @@
 <div class="toast-container" id="toast-container"></div>
 
 <!-- ═══════════════════════════════════════════════════════
+     QUICK-ADD MODAL
+═══════════════════════════════════════════════════════ -->
+<div class="qa-overlay" id="qa-overlay" onclick="if(event.target===this)closeQuickAdd()">
+  <form class="qa-modal" id="qa-form" onsubmit="submitQuickAdd(event)">
+    <div class="qa-head">
+      <h3>➕ Nieuwe vraag toevoegen</h3>
+      <button type="button" class="qa-close" onclick="closeQuickAdd()">✕</button>
+    </div>
+    <div class="qa-sub">De chatbot leert meteen uit deze vraag en gebruikt hem voor alle talen (NL / EN / FR / DE).</div>
+
+    <div class="qa-field">
+      <label class="qa-label" for="qa-question">Vraag <span class="req">*</span></label>
+      <input class="qa-input" type="text" id="qa-question" placeholder="bv. Hoe reset ik mijn Wifipool-apparaat?" required />
+    </div>
+
+    <div class="qa-field">
+      <label class="qa-label" for="qa-answer">Antwoord <span class="req">*</span></label>
+      <textarea class="qa-textarea" id="qa-answer" placeholder="Schrijf hier het antwoord dat de chatbot moet geven…" required></textarea>
+    </div>
+
+    <div class="qa-field">
+      <label class="qa-label" for="qa-video">YouTube-link <span class="opt">(optioneel)</span></label>
+      <input class="qa-input" type="url" id="qa-video" placeholder="https://www.youtube.com/watch?v=…" />
+    </div>
+
+    <div class="qa-field">
+      <label class="qa-label" for="qa-image">Afbeelding <span class="opt">(optioneel — PNG / JPG)</span></label>
+      <label class="qa-file-box" for="qa-image">
+        <span>📎</span>
+        <span id="qa-image-label">Klik om een afbeelding te kiezen…</span>
+      </label>
+      <input type="file" id="qa-image" accept="image/*" style="display:none;" onchange="onImagePicked(this)" />
+    </div>
+
+    <div class="qa-actions">
+      <button type="button" class="kb-btn secondary" onclick="closeQuickAdd()">Annuleren</button>
+      <button type="submit" class="kb-btn primary" id="qa-submit">
+        <span>✅</span> Opslaan
+      </button>
+    </div>
+
+    <div class="qa-footer-note">
+      💡 De vraag wordt automatisch toegevoegd aan het Excel-bestand en de chatbot leert er meteen uit.
+    </div>
+  </form>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
      JAVASCRIPT
 ═══════════════════════════════════════════════════════ -->
 <script>
@@ -1593,6 +1847,115 @@ function showSection(name) {
 }
 
 function refreshCurrent() { showSection(currentSection); }
+
+/* ─── Quick-add + Excel download/upload ───────────────────── */
+function openQuickAdd() {
+  document.getElementById('qa-overlay').classList.add('open');
+  setTimeout(() => document.getElementById('qa-question')?.focus(), 50);
+}
+function closeQuickAdd() {
+  document.getElementById('qa-overlay').classList.remove('open');
+  document.getElementById('qa-form')?.reset();
+  document.getElementById('qa-image-label').textContent = 'Klik om een afbeelding te kiezen…';
+}
+function onImagePicked(input) {
+  const f = input.files && input.files[0];
+  document.getElementById('qa-image-label').textContent = f ? f.name : 'Klik om een afbeelding te kiezen…';
+}
+
+async function submitQuickAdd(e) {
+  e.preventDefault();
+  const question = document.getElementById('qa-question').value.trim();
+  const answer = document.getElementById('qa-answer').value.trim();
+  const video = document.getElementById('qa-video').value.trim();
+  const imageInput = document.getElementById('qa-image');
+  const btn = document.getElementById('qa-submit');
+
+  if (!question || !answer) { showToast('Vraag en antwoord zijn verplicht', 'error'); return; }
+
+  const fd = new FormData();
+  fd.append('question', question);
+  fd.append('answer', answer);
+  if (video) fd.append('video_url', video);
+  if (imageInput.files && imageInput.files[0]) fd.append('image', imageInput.files[0]);
+
+  btn.disabled = true;
+  const originalHTML = btn.innerHTML;
+  btn.innerHTML = '<span>⏳</span> Opslaan…';
+  try {
+    const r = await fetch('/admin/faq/quick-add', {
+      method: 'POST',
+      headers: _authHeaders(),
+      body: fd
+    });
+    if (r.status === 401) { clearToken(); showLogin(); return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    showToast(`Vraag opgeslagen! ${data.faq_loaded} items in kennisbank.`, 'success');
+    closeQuickAdd();
+    loadOverview();
+  } catch (ex) {
+    console.error(ex);
+    showToast('Fout: ' + (ex.message || 'kon niet opslaan'), 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHTML;
+  }
+}
+
+async function downloadExcel() {
+  showToast('Excel wordt gedownload…', 'info');
+  try {
+    const r = await fetch('/admin/excel/download', { headers: _authHeaders() });
+    if (r.status === 401) { clearToken(); showLogin(); return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'AI 2.0.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (ex) {
+    showToast('Fout bij downloaden: ' + ex.message, 'error');
+  }
+}
+
+async function uploadExcel(input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  if (!f.name.toLowerCase().endsWith('.xlsx')) {
+    showToast('Het bestand moet een .xlsx zijn', 'error');
+    input.value = ''; return;
+  }
+  if (!confirm(`Weet je zeker dat je "${f.name}" wil uploaden? Dit vervangt het huidige Excel-bestand.`)) {
+    input.value = ''; return;
+  }
+  const fd = new FormData();
+  fd.append('file', f);
+  showToast('Excel wordt geüpload en geladen…', 'info');
+  try {
+    const r = await fetch('/admin/excel/upload', {
+      method: 'POST',
+      headers: _authHeaders(),
+      body: fd
+    });
+    if (r.status === 401) { clearToken(); showLogin(); return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    showToast(`Excel geladen: ${data.entries} vragen, ${data.images} afbeeldingen`, 'success');
+    loadOverview();
+  } catch (ex) {
+    showToast('Upload mislukt: ' + ex.message, 'error');
+  } finally {
+    input.value = '';
+  }
+}
 
 /* ─── Reload from Excel ───────────────────────────────────── */
 async function reloadFromExcel(polish = false) {

@@ -3166,3 +3166,162 @@ async def reload_from_excel_endpoint(polish: bool = False, _auth: bool = Depends
         "polished": summary.get("polished", 0),
         "faq_loaded": count,
     }
+
+
+# ---------------------------------------------------------------------
+# Admin: Excel download / upload (bulk edits for the client)
+# ---------------------------------------------------------------------
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+_EXCEL_PATH = os.path.join(_PROJECT_ROOT, "AI 2.0.xlsx")
+
+@app.get("/admin/excel/download")
+def download_excel(_auth: bool = Depends(require_admin)):
+    if not os.path.exists(_EXCEL_PATH):
+        raise HTTPException(status_code=404, detail="Excel not found on server")
+    return FileResponse(
+        _EXCEL_PATH,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="AI 2.0.xlsx",
+    )
+
+
+@app.post("/admin/excel/upload")
+async def upload_excel(request: Request, _auth: bool = Depends(require_admin)):
+    """Receive a replacement AI 2.0.xlsx (multipart form field 'file') and reload."""
+    from fastapi import UploadFile
+    form = await request.form()
+    file = form.get("file")
+    if file is None or not hasattr(file, "filename"):
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="File must be a .xlsx")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    # Backup current file (keep last 3)
+    try:
+        if os.path.exists(_EXCEL_PATH):
+            bak_dir = os.path.join(_PROJECT_ROOT, "excel_backups")
+            os.makedirs(bak_dir, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            import shutil as _sh
+            _sh.copy2(_EXCEL_PATH, os.path.join(bak_dir, f"AI 2.0.{ts}.xlsx"))
+            # Keep only last 3
+            bks = sorted(os.listdir(bak_dir))
+            for old in bks[:-3]:
+                try: os.remove(os.path.join(bak_dir, old))
+                except Exception: pass
+    except Exception:
+        logger.warning("Excel backup failed", exc_info=True)
+
+    # Write new file
+    with open(_EXCEL_PATH, "wb") as f:
+        f.write(content)
+
+    # Reload
+    try:
+        from .excel_loader import reload_from_excel
+        summary = reload_from_excel(polish=False)
+    except Exception as e:
+        logger.exception("Excel reload after upload failed")
+        raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
+
+    count, _ = _reload_faq()
+    return {
+        "ok": True,
+        "entries": summary["entries"],
+        "images": summary["images"],
+        "faq_loaded": count,
+    }
+
+
+# ---------------------------------------------------------------------
+# Admin: quick-add a single Q&A (appends to JSONL + reloads)
+# ---------------------------------------------------------------------
+@app.post("/admin/faq/quick-add")
+async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
+    """Quick-add a single Q&A (multipart/form-data).
+
+    Fields: question (required), answer (required),
+            video_url (optional), image (optional file upload).
+    Appends to AI 2.0.xlsx (preserves truth source) and to JSONL, then reloads.
+    """
+    form = await request.form()
+    question = (form.get("question") or "").strip()
+    answer = (form.get("answer") or "").strip()
+    video_url = (form.get("video_url") or "").strip()
+    image = form.get("image")
+
+    if not question or not answer:
+        raise HTTPException(status_code=400, detail="Question et réponse obligatoires")
+
+    # Save image if provided
+    image_rel = ""
+    if image is not None and getattr(image, "filename", ""):
+        img_bytes = await image.read()
+        if img_bytes:
+            images_dir = os.path.join(_PROJECT_ROOT, "app", "data", "faq_images")
+            os.makedirs(images_dir, exist_ok=True)
+            ext = os.path.splitext(image.filename)[1].lower() or ".png"
+            if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                ext = ".png"
+            fname = f"manual_{int(time.time())}{ext}"
+            with open(os.path.join(images_dir, fname), "wb") as f:
+                f.write(img_bytes)
+            image_rel = f"app/data/faq_images/{fname}"
+
+    # 1) Append to Excel (source of truth)
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(_EXCEL_PATH)
+        ws = wb["Alle vragen"] if "Alle vragen" in wb.sheetnames else wb.active
+        # Find header positions
+        header = [ (c.value or "").strip() if c.value else "" for c in ws[1] ]
+        def col_for(name: str) -> Optional[int]:
+            for i, h in enumerate(header, start=1):
+                if h.lower() == name.lower():
+                    return i
+            return None
+        c_vraag = col_for("Vraag")
+        c_antw  = col_for("Antwoord")
+        c_film  = col_for("Filmpje") or col_for("video_url")
+        c_cat   = col_for("Categorie")
+        new_row = ws.max_row + 1
+        if c_vraag: ws.cell(row=new_row, column=c_vraag, value=question)
+        if c_antw:  ws.cell(row=new_row, column=c_antw,  value=answer)
+        if c_film and video_url: ws.cell(row=new_row, column=c_film, value=video_url)
+        if c_cat and not ws.cell(row=new_row, column=c_cat).value:
+            ws.cell(row=new_row, column=c_cat, value="Algemeen")
+        wb.save(_EXCEL_PATH)
+    except Exception as e:
+        logger.exception("Excel append failed")
+        raise HTTPException(status_code=500, detail=f"Kon Excel niet bijwerken: {e}")
+
+    # 2) Reload from Excel (regenerates JSONL + images)
+    try:
+        from .excel_loader import reload_from_excel
+        reload_from_excel(polish=False)
+    except Exception as e:
+        logger.exception("Reload after quick-add failed")
+        raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
+
+    # 3) If we had a manually uploaded image, append image_path to that entry in JSONL
+    if image_rel:
+        try:
+            lines = []
+            with open(_FAQ_FALLBACK_JSONL, "r", encoding="utf-8") as f:
+                for line in f:
+                    lines.append(line)
+            if lines:
+                last = json.loads(lines[-1])
+                last["image_path"] = image_rel
+                lines[-1] = json.dumps(last, ensure_ascii=False) + "\n"
+                with open(_FAQ_FALLBACK_JSONL, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+        except Exception:
+            logger.warning("Could not attach manual image to last entry", exc_info=True)
+
+    count, _ = _reload_faq()
+    return {"ok": True, "faq_loaded": count, "image": image_rel or None}
