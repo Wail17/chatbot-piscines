@@ -6,7 +6,9 @@ from math import sqrt
 from threading import Lock
 from difflib import SequenceMatcher, get_close_matches
 
-from fastapi import FastAPI, Request, HTTPException
+import secrets as _secrets
+
+from fastapi import FastAPI, Request, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -87,9 +89,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Chatbot Piscines API")
 
-# Include admin router
-app.include_router(admin_router)
-
 # ---------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------
@@ -114,6 +113,7 @@ app.add_middleware(
         "Authorization",
         "Accept",
         "Origin",
+        "X-Admin-Token",
     ],
     expose_headers=["Content-Type"],
 )
@@ -2285,6 +2285,33 @@ def _parse_extra_gen(extra: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 # ---------------------------------------------------------------------
+# Admin auth (shared password via ADMIN_PASSWORD env var, fallback "admin")
+# ---------------------------------------------------------------------
+def _admin_password() -> str:
+    return os.environ.get("ADMIN_PASSWORD", "admin")
+
+def require_admin(x_admin_token: Optional[str] = Header(None)):
+    expected = _admin_password()
+    if not x_admin_token or not _secrets.compare_digest(x_admin_token, expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
+
+class AdminLoginRequest(BaseModel):
+    password: str
+
+@app.post("/admin/login")
+def admin_login(payload: AdminLoginRequest):
+    expected = _admin_password()
+    if not _secrets.compare_digest(payload.password or "", expected):
+        raise HTTPException(status_code=401, detail="Invalid password")
+    return {"ok": True, "token": payload.password}
+
+
+# Include admin router (FAQ manager) — protected by require_admin
+app.include_router(admin_router, dependencies=[Depends(require_admin)])
+
+
+# ---------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------
 @app.get("/health")
@@ -2321,7 +2348,7 @@ def health():
     return info
 
 @app.get("/analytics")
-def analytics(days: int = 7):
+def analytics(days: int = 7, _auth: bool = Depends(require_admin)):
     """Return usage analytics report."""
     if not _ANALYTICS_AVAILABLE:
         return {"error": "Analytics not available"}
@@ -2329,7 +2356,7 @@ def analytics(days: int = 7):
 
 
 @app.get("/faq/gaps")
-def faq_gaps(min_count: int = 1):
+def faq_gaps(min_count: int = 1, _auth: bool = Depends(require_admin)):
     """Return questions that were asked but never got a good FAQ answer."""
     if not _ANALYTICS_AVAILABLE:
         return {"gaps": [], "note": "Analytics not available"}
@@ -3103,7 +3130,7 @@ app.mount("/faq_images", StaticFiles(directory=_FAQ_IMAGES_DIR), name="faq_image
 # Admin: reload from Excel (AI 2.0.xlsx → JSONL + images)
 # ---------------------------------------------------------------------
 @app.post("/admin/clear-cache")
-async def clear_cache_endpoint():
+async def clear_cache_endpoint(_auth: bool = Depends(require_admin)):
     """Clear the response cache (call after deploying a new answer generation logic)."""
     try:
         cache_invalidate_all()
@@ -3114,7 +3141,7 @@ async def clear_cache_endpoint():
 
 
 @app.post("/admin/reload-excel")
-async def reload_from_excel_endpoint(polish: bool = False):
+async def reload_from_excel_endpoint(polish: bool = False, _auth: bool = Depends(require_admin)):
     """Rebuild FAQAI.jsonl + faq_images/ from AI 2.0.xlsx and reload the in-memory FAQ.
 
     Query params:
