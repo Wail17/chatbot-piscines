@@ -1405,13 +1405,75 @@
       border-top: 1px solid var(--border);
     }
 
-    /* ── Responsive hint ───────────────────────────────────── */
+    /* ── Hamburger + mobile drawer ─────────────────────────── */
+    .hamburger {
+      display: none;
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      border-radius: 10px;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      color: var(--text-primary);
+      margin-right: 10px;
+    }
+    .sidebar-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(12,36,56,0.35);
+      backdrop-filter: blur(2px);
+      z-index: 40;
+    }
+    .sidebar-backdrop.open { display: block; }
+
+    /* ── Responsive ────────────────────────────────────────── */
     @media (max-width: 900px) {
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .charts-grid { grid-template-columns: 1fr; }
       .hero-grid { grid-template-columns: 1fr; }
       .split-grid { grid-template-columns: 1fr; }
       .kb-grid { grid-template-columns: 1fr; }
+
+      .hamburger { display: inline-flex; }
+
+      .sidebar {
+        position: fixed;
+        top: 0; left: 0; bottom: 0;
+        width: 260px;
+        transform: translateX(-110%);
+        transition: transform 0.28s ease;
+        box-shadow: 0 10px 40px rgba(12,36,56,0.18);
+        z-index: 50;
+      }
+      .sidebar.open { transform: translateX(0); }
+
+      .topbar { padding: 0 16px; height: 56px; }
+      .topbar-title { font-size: 15px; }
+      .topbar-refresh span + * , .topbar-refresh { font-size: 12px; padding: 5px 10px; }
+      .topbar-right > div:first-child { display: none; }
+
+      .content { padding: 18px 14px; }
+      .section-header h2 { font-size: 19px; }
+      .section-header p { font-size: 13px; }
+    }
+
+    @media (max-width: 560px) {
+      .stat-grid { grid-template-columns: 1fr; }
+      .hero-card { padding: 20px; }
+      .hero-card .big-num, .hero-card .lang-code-big { font-size: 40px !important; }
+      .kb-card { padding: 18px; }
+      .kb-actions { flex-direction: column; align-items: stretch; }
+      .kb-btn { width: 100%; justify-content: center; }
+      .modal { width: calc(100vw - 24px); max-width: none; }
+      .login-card { padding: 28px 22px; }
+      .login-card h1 { font-size: 20px; }
+      .top-q-row { font-size: 13px; }
+      table { font-size: 12px; }
+      td, th { padding: 8px !important; }
     }
   </style>
 </head>
@@ -1431,6 +1493,7 @@
   </form>
 </div>
 
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()"></div>
 <div class="layout" id="app-layout" style="visibility:hidden;">
 
   <!-- ═══════════════════════════════════════════════════════
@@ -1474,7 +1537,10 @@
 
     <!-- Top Bar -->
     <div class="topbar">
-      <div class="topbar-title" id="topbar-title">Overzicht</div>
+      <div style="display:flex;align-items:center;">
+        <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">☰</button>
+        <div class="topbar-title" id="topbar-title">Overzicht</div>
+      </div>
       <div class="topbar-right">
         <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
           <div class="topbar-dot"></div>
@@ -1814,6 +1880,23 @@ function showSection(name) {
 }
 
 function refreshCurrent() { showSection(currentSection); }
+
+/* ─── Mobile sidebar drawer ───────────────────────────────── */
+function toggleSidebar() {
+  const sb = document.querySelector('.sidebar');
+  const bd = document.getElementById('sidebar-backdrop');
+  if (!sb) return;
+  const open = sb.classList.toggle('open');
+  if (bd) bd.classList.toggle('open', open);
+}
+function closeSidebar() {
+  document.querySelector('.sidebar')?.classList.remove('open');
+  document.getElementById('sidebar-backdrop')?.classList.remove('open');
+}
+document.addEventListener('click', (e) => {
+  const item = e.target.closest('.nav-item');
+  if (item && window.innerWidth <= 900) closeSidebar();
+});
 
 /* ─── Quick-add + Excel download/upload ───────────────────── */
 function openQuickAdd() {
