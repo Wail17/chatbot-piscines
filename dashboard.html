@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -1486,9 +1486,9 @@
   <form class="login-card" id="login-form" onsubmit="onLoginSubmit(event)">
     <div class="login-logo">🌊</div>
     <h1>Wifipool Admin</h1>
-    <p>Voer het beheerderswachtwoord in om verder te gaan.</p>
-    <input class="login-input" type="password" id="login-password" placeholder="Wachtwoord" autocomplete="current-password" required />
-    <button class="login-btn" type="submit" id="login-btn">Inloggen</button>
+    <p>Enter the admin password to continue.</p>
+    <input class="login-input" type="password" id="login-password" placeholder="Password" autocomplete="current-password" required />
+    <button class="login-btn" type="submit" id="login-btn">Sign in</button>
     <div class="login-error" id="login-error"></div>
   </form>
 </div>
@@ -1511,21 +1511,21 @@
     </div>
 
     <nav class="sidebar-nav">
-      <div class="sidebar-section-label">Navigatie</div>
+      <div class="sidebar-section-label">Navigation</div>
 
       <div class="nav-item active" onclick="showSection('overview')" id="nav-overview">
         <span class="nav-icon">📊</span>
-        <span>Overzicht</span>
+        <span>Overview</span>
       </div>
       <div class="nav-item" onclick="showSection('gaps')" id="nav-gaps">
         <span class="nav-icon">❓</span>
-        <span>Ontbrekende vragen</span>
+        <span>Unanswered questions</span>
         <span class="nav-badge" id="nav-gaps-badge" style="display:none">!</span>
       </div>
     </nav>
 
     <div class="sidebar-footer">
-      <button class="sidebar-logout" onclick="logout()">🚪 Uitloggen</button>
+      <button class="sidebar-logout" onclick="logout()">🚪 Log out</button>
       <div>Wifipool Admin &nbsp;·&nbsp; v2.1</div>
     </div>
   </aside>
@@ -1539,7 +1539,7 @@
     <div class="topbar">
       <div style="display:flex;align-items:center;">
         <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">☰</button>
-        <div class="topbar-title" id="topbar-title">Overzicht</div>
+        <div class="topbar-title" id="topbar-title">Overview</div>
       </div>
       <div class="topbar-right">
         <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);">
@@ -1547,7 +1547,7 @@
           Online
         </div>
         <button class="topbar-refresh" onclick="refreshCurrent()">
-          <span>↻</span> Vernieuwen
+          <span>↻</span> Refresh
         </button>
       </div>
     </div>
@@ -1560,66 +1560,66 @@
       ───────────────────────────────────────────────── -->
       <div class="section active" id="section-overview">
         <div class="section-header">
-          <h2>Overzicht</h2>
-          <p>Samenvatting van de chatbot prestaties van de afgelopen 7 dagen</p>
+          <h2>Overview</h2>
+          <p>Summary of chatbot performance over the last 7 days</p>
         </div>
 
         <!-- ═══ Kennisbank beheren ═══ -->
         <div class="kb-grid">
 
-          <!-- Optie 1 — Snelle toevoeging -->
+          <!-- Option 1 — Quick add -->
           <div class="kb-card">
-            <div class="kb-badge">Optie 1</div>
-            <div class="kb-title">➕ Snel een vraag toevoegen</div>
+            <div class="kb-badge">Option 1</div>
+            <div class="kb-title">➕ Quickly add a question</div>
             <div class="kb-desc">
-              Perfect om <b>1 tot 5 vragen</b> toe te voegen.
-              De chatbot leert meteen en gebruikt jouw antwoord direct.
-              Je kan ook een <b>foto</b> of een <b>video (YouTube-link)</b> meegeven.
+              Perfect for adding <b>1 to 5 questions</b>.
+              The chatbot learns instantly and uses your answer right away.
+              You can also attach a <b>photo</b> or a <b>video (YouTube link)</b>.
             </div>
             <button class="kb-btn primary" onclick="openQuickAdd()">
-              <span>➕</span> Nieuwe vraag toevoegen
+              <span>➕</span> Add new question
             </button>
           </div>
 
-          <!-- Optie 2 — Excel bulk -->
+          <!-- Option 2 — Excel bulk -->
           <div class="kb-card">
-            <div class="kb-badge">Optie 2</div>
-            <div class="kb-title">📊 Veel vragen tegelijk bewerken</div>
+            <div class="kb-badge">Option 2</div>
+            <div class="kb-title">📊 Edit many questions at once</div>
             <div class="kb-desc">
-              Voor <b>grote wijzigingen</b>: download het Excel-bestand,
-              bewerk het op je computer in Excel (voeg vragen toe, verbeter antwoorden,
-              plak vertalingen of afbeeldingen), en upload het daarna opnieuw.
-              De chatbot leert meteen uit het nieuwe bestand.
+              For <b>large changes</b>: download the Excel file,
+              edit it on your computer in Excel (add questions, improve answers,
+              paste translations or images), and upload it again.
+              The chatbot learns instantly from the new file.
             </div>
             <div class="kb-actions">
               <button class="kb-btn primary" onclick="downloadExcel()">
-                <span>📥</span> Excel downloaden
+                <span>📥</span> Download Excel
               </button>
               <label class="kb-btn secondary" for="excel-upload-input">
-                <span>📤</span> Excel uploaden
+                <span>📤</span> Upload Excel
               </label>
               <input type="file" id="excel-upload-input" accept=".xlsx" style="display:none;" onchange="uploadExcel(this)" />
             </div>
-            <div class="kb-hint">💡 Tip: maak een kopie van het bestand voordat je wijzigingen maakt.</div>
+            <div class="kb-hint">💡 Tip: make a copy of the file before making changes.</div>
           </div>
         </div>
 
         <!-- Language card -->
         <div class="hero-card lang" style="margin-bottom:20px;">
-          <div class="hero-kicker">🌐 Meest gebruikte taal</div>
+          <div class="hero-kicker">🌐 Most used language</div>
           <div class="hero-big"><span id="hero-lang-code">—</span><span class="unit" id="hero-lang-pct"></span></div>
-          <div class="hero-sub" id="hero-lang-sub">Nog geen data</div>
+          <div class="hero-sub" id="hero-lang-sub">No data yet</div>
           <div class="lang-bars" id="hero-lang-bars"></div>
         </div>
 
         <!-- Top questions -->
         <div class="chart-card" style="margin-bottom:0;">
           <div class="chart-card-header">
-            <span class="chart-card-title">🔥 Meest gestelde vragen</span>
-            <span style="font-size:12px;color:var(--text-secondary);">Klik om te kopiëren</span>
+            <span class="chart-card-title">🔥 Most asked questions</span>
+            <span style="font-size:12px;color:var(--text-secondary);">Click to copy</span>
           </div>
           <div id="overview-top-q">
-            <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
+            <div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
           </div>
         </div>
       </div>
@@ -1629,20 +1629,20 @@
       ───────────────────────────────────────────────── -->
       <div class="section" id="section-gaps">
         <div class="section-header">
-          <h2>Ontbrekende vragen ❓</h2>
-          <p>Vragen van uw klanten waarop de chatbot geen antwoord had</p>
+          <h2>Unanswered questions ❓</h2>
+          <p>Questions from your customers the chatbot couldn't answer</p>
         </div>
 
         <div class="gap-banner">
           <div class="gap-banner-icon">🧠</div>
           <div class="gap-banner-text">
-            <h3>Verbeter uw dekkingsgraad</h3>
-            <p>Deze vragen hadden geen antwoord. Voeg ze toe om uw SAV-team te ontlasten.</p>
+            <h3>Improve your coverage</h3>
+            <p>These questions had no answer. Add them to lighten the load on your support team.</p>
           </div>
         </div>
 
         <div id="gaps-container">
-          <div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>
+          <div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
         </div>
       </div>
 
@@ -1656,28 +1656,28 @@
 <div class="modal-overlay" id="modal-faq" onclick="handleOverlayClick(event,'modal-faq')">
   <div class="modal">
     <div class="modal-header">
-      <span class="modal-title" id="modal-faq-title">Nieuwe FAQ-vermelding</span>
+      <span class="modal-title" id="modal-faq-title">New FAQ entry</span>
       <button class="modal-close" onclick="closeModal('modal-faq')">✕</button>
     </div>
     <div class="modal-body">
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">Categorie <span>*</span></label>
-          <input class="form-input" id="faq-cat" type="text" placeholder="ex: Entretien, Sécurité…" />
+          <label class="form-label">Category <span>*</span></label>
+          <input class="form-input" id="faq-cat" type="text" placeholder="e.g. Maintenance, Safety…" />
         </div>
         <div class="form-group">
           <label class="form-label">Tags</label>
           <input class="form-input" id="faq-tags" type="text" placeholder="tag1, tag2, tag3" />
-          <div class="form-hint">Scheid tags met komma's</div>
+          <div class="form-hint">Separate tags with commas</div>
         </div>
       </div>
       <div class="form-group">
         <label class="form-label">Question <span>*</span></label>
-        <textarea class="form-textarea" id="faq-question" placeholder="Voer de vraag in…" style="min-height:70px;"></textarea>
+        <textarea class="form-textarea" id="faq-question" placeholder="Enter the question…" style="min-height:70px;"></textarea>
       </div>
       <div class="form-group">
-        <label class="form-label">Antwoord <span>*</span></label>
-        <textarea class="form-textarea" id="faq-answer" placeholder="Voer het volledige antwoord in…" style="min-height:120px;"></textarea>
+        <label class="form-label">Answer <span>*</span></label>
+        <textarea class="form-textarea" id="faq-answer" placeholder="Enter the full answer…" style="min-height:120px;"></textarea>
       </div>
       <div class="form-group">
         <label class="form-label">Video URL</label>
@@ -1685,8 +1685,8 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-faq')">Annuleren</button>
-      <button class="btn btn-primary" onclick="submitFaqForm()" id="faq-submit-btn">Opslaan</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-faq')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitFaqForm()" id="faq-submit-btn">Save</button>
     </div>
   </div>
 </div>
@@ -1697,13 +1697,13 @@
 <div class="modal-overlay" id="modal-view" onclick="handleOverlayClick(event,'modal-view')">
   <div class="modal modal-lg">
     <div class="modal-header">
-      <span class="modal-title">FAQ-vermelding detail</span>
+      <span class="modal-title">FAQ entry details</span>
       <button class="modal-close" onclick="closeModal('modal-view')">✕</button>
     </div>
     <div class="modal-body" id="modal-view-body">
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-view')">Sluiten</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-view')">Close</button>
     </div>
   </div>
 </div>
@@ -1719,44 +1719,44 @@
 <div class="qa-overlay" id="qa-overlay" onclick="if(event.target===this)closeQuickAdd()">
   <form class="qa-modal" id="qa-form" onsubmit="submitQuickAdd(event)">
     <div class="qa-head">
-      <h3>➕ Nieuwe vraag toevoegen</h3>
+      <h3>➕ Add new question</h3>
       <button type="button" class="qa-close" onclick="closeQuickAdd()">✕</button>
     </div>
-    <div class="qa-sub">De chatbot leert meteen uit deze vraag en gebruikt hem voor alle talen (NL / EN / FR / DE).</div>
+    <div class="qa-sub">The chatbot learns from this question instantly and uses it for all languages (NL / EN / FR / DE).</div>
 
     <div class="qa-field">
-      <label class="qa-label" for="qa-question">Vraag <span class="req">*</span></label>
-      <input class="qa-input" type="text" id="qa-question" placeholder="bv. Hoe reset ik mijn Wifipool-apparaat?" required />
+      <label class="qa-label" for="qa-question">Question <span class="req">*</span></label>
+      <input class="qa-input" type="text" id="qa-question" placeholder="e.g. How do I reset my Wifipool device?" required />
     </div>
 
     <div class="qa-field">
-      <label class="qa-label" for="qa-answer">Antwoord <span class="req">*</span></label>
-      <textarea class="qa-textarea" id="qa-answer" placeholder="Schrijf hier het antwoord dat de chatbot moet geven…" required></textarea>
+      <label class="qa-label" for="qa-answer">Answer <span class="req">*</span></label>
+      <textarea class="qa-textarea" id="qa-answer" placeholder="Write the answer the chatbot should give…" required></textarea>
     </div>
 
     <div class="qa-field">
-      <label class="qa-label" for="qa-video">YouTube-link <span class="opt">(optioneel)</span></label>
+      <label class="qa-label" for="qa-video">YouTube link <span class="opt">(optional)</span></label>
       <input class="qa-input" type="url" id="qa-video" placeholder="https://www.youtube.com/watch?v=…" />
     </div>
 
     <div class="qa-field">
-      <label class="qa-label" for="qa-image">Afbeelding <span class="opt">(optioneel — PNG / JPG)</span></label>
+      <label class="qa-label" for="qa-image">Image <span class="opt">(optional — PNG / JPG)</span></label>
       <label class="qa-file-box" for="qa-image">
         <span>📎</span>
-        <span id="qa-image-label">Klik om een afbeelding te kiezen…</span>
+        <span id="qa-image-label">Click to choose an image…</span>
       </label>
       <input type="file" id="qa-image" accept="image/*" style="display:none;" onchange="onImagePicked(this)" />
     </div>
 
     <div class="qa-actions">
-      <button type="button" class="kb-btn secondary" onclick="closeQuickAdd()">Annuleren</button>
+      <button type="button" class="kb-btn secondary" onclick="closeQuickAdd()">Cancel</button>
       <button type="submit" class="kb-btn primary" id="qa-submit">
-        <span>✅</span> Opslaan
+        <span>✅</span> Save
       </button>
     </div>
 
     <div class="qa-footer-note">
-      💡 De vraag wordt automatisch toegevoegd aan het Excel-bestand en de chatbot leert er meteen uit.
+      💡 The question is automatically added to the Excel file and the chatbot learns from it instantly.
     </div>
   </form>
 </div>
@@ -1795,7 +1795,7 @@ async function onLoginSubmit(e) {
   const err = document.getElementById('login-error');
   err.textContent = '';
   btn.disabled = true;
-  btn.textContent = 'Inloggen…';
+  btn.textContent = 'Signing in…';
   try {
     const r = await fetch('/admin/login', {
       method: 'POST',
@@ -1803,7 +1803,7 @@ async function onLoginSubmit(e) {
       body: JSON.stringify({ password: pwd })
     });
     if (!r.ok) {
-      err.textContent = r.status === 401 ? 'Verkeerd wachtwoord.' : `Fout (HTTP ${r.status})`;
+      err.textContent = r.status === 401 ? 'Wrong password.' : `Error (HTTP ${r.status})`;
       return;
     }
     const data = await r.json();
@@ -1812,10 +1812,10 @@ async function onLoginSubmit(e) {
     document.getElementById('login-password').value = '';
     showSection(currentSection || 'overview');
   } catch (ex) {
-    err.textContent = 'Netwerkfout. Probeer opnieuw.';
+    err.textContent = 'Network error. Please try again.';
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Inloggen';
+    btn.textContent = 'Sign in';
   }
 }
 
@@ -1862,7 +1862,7 @@ const API = {
 /* ─── Navigation ──────────────────────────────────────────── */
 const SECTION_TITLES = {
   overview: 'Overzicht',
-  gaps: 'Ontbrekende vragen ❓'
+  gaps: 'Unanswered questions ❓'
 };
 
 function showSection(name) {
@@ -1906,11 +1906,11 @@ function openQuickAdd() {
 function closeQuickAdd() {
   document.getElementById('qa-overlay').classList.remove('open');
   document.getElementById('qa-form')?.reset();
-  document.getElementById('qa-image-label').textContent = 'Klik om een afbeelding te kiezen…';
+  document.getElementById('qa-image-label').textContent = 'Click to choose an image…';
 }
 function onImagePicked(input) {
   const f = input.files && input.files[0];
-  document.getElementById('qa-image-label').textContent = f ? f.name : 'Klik om een afbeelding te kiezen…';
+  document.getElementById('qa-image-label').textContent = f ? f.name : 'Click to choose an image…';
 }
 
 async function submitQuickAdd(e) {
@@ -1921,7 +1921,7 @@ async function submitQuickAdd(e) {
   const imageInput = document.getElementById('qa-image');
   const btn = document.getElementById('qa-submit');
 
-  if (!question || !answer) { showToast('Vraag en antwoord zijn verplicht', 'error'); return; }
+  if (!question || !answer) { showToast('Question and answer are required', 'error'); return; }
 
   const fd = new FormData();
   fd.append('question', question);
@@ -1931,7 +1931,7 @@ async function submitQuickAdd(e) {
 
   btn.disabled = true;
   const originalHTML = btn.innerHTML;
-  btn.innerHTML = '<span>⏳</span> Opslaan…';
+  btn.innerHTML = '<span>⏳</span> Saving…';
   try {
     const r = await fetch('/admin/faq/quick-add', {
       method: 'POST',
@@ -1944,12 +1944,12 @@ async function submitQuickAdd(e) {
       throw new Error(err.detail || `HTTP ${r.status}`);
     }
     const data = await r.json();
-    showToast(`Vraag opgeslagen! ${data.faq_loaded} items in kennisbank.`, 'success');
+    showToast(`Question saved! ${data.faq_loaded} items in knowledge base.`, 'success');
     closeQuickAdd();
     loadOverview();
   } catch (ex) {
     console.error(ex);
-    showToast('Fout: ' + (ex.message || 'kon niet opslaan'), 'error');
+    showToast('Error: ' + (ex.message || 'could not save'), 'error');
   } finally {
     btn.disabled = false;
     btn.innerHTML = originalHTML;
@@ -1957,7 +1957,7 @@ async function submitQuickAdd(e) {
 }
 
 async function downloadExcel() {
-  showToast('Excel wordt gedownload…', 'info');
+  showToast('Downloading Excel…', 'info');
   try {
     const r = await fetch('/admin/excel/download', { headers: _authHeaders() });
     if (r.status === 401) { clearToken(); showLogin(); return; }
@@ -1969,7 +1969,7 @@ async function downloadExcel() {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   } catch (ex) {
-    showToast('Fout bij downloaden: ' + ex.message, 'error');
+    showToast('Download failed: ' + ex.message, 'error');
   }
 }
 
@@ -1977,15 +1977,15 @@ async function uploadExcel(input) {
   const f = input.files && input.files[0];
   if (!f) return;
   if (!f.name.toLowerCase().endsWith('.xlsx')) {
-    showToast('Het bestand moet een .xlsx zijn', 'error');
+    showToast('The file must be an .xlsx', 'error');
     input.value = ''; return;
   }
-  if (!confirm(`Weet je zeker dat je "${f.name}" wil uploaden? Dit vervangt het huidige Excel-bestand.`)) {
+  if (!confirm(`Are you sure you want to upload "${f.name}"? This will replace the current Excel file.`)) {
     input.value = ''; return;
   }
   const fd = new FormData();
   fd.append('file', f);
-  showToast('Excel wordt geüpload en geladen…', 'info');
+  showToast('Uploading and loading Excel…', 'info');
   try {
     const r = await fetch('/admin/excel/upload', {
       method: 'POST',
@@ -1998,10 +1998,10 @@ async function uploadExcel(input) {
       throw new Error(err.detail || `HTTP ${r.status}`);
     }
     const data = await r.json();
-    showToast(`Excel geladen: ${data.entries} vragen, ${data.images} afbeeldingen`, 'success');
+    showToast(`Excel loaded: ${data.entries} questions, ${data.images} images`, 'success');
     loadOverview();
   } catch (ex) {
-    showToast('Upload mislukt: ' + ex.message, 'error');
+    showToast('Upload failed: ' + ex.message, 'error');
   } finally {
     input.value = '';
   }
@@ -2018,16 +2018,16 @@ async function reloadFromExcel(polish = false) {
   btn.disabled = true;
   if (otherBtn) otherBtn.disabled = true;
   btn.style.opacity = '0.7';
-  if (label) label.textContent = polish ? 'AI kuist antwoorden op…' : 'Bezig met laden…';
+  if (label) label.textContent = polish ? 'AI is polishing answers…' : 'Loading…';
   try {
     const url = `/admin/reload-excel${polish ? '?polish=true' : ''}`;
     const data = await API.post(url, {});
-    const extra = data.polished ? `, ${data.polished} antwoorden opgekuist` : '';
-    showToast(`Excel geladen: ${data.entries} items, ${data.images} afbeeldingen${extra}`, 'success');
+    const extra = data.polished ? `, ${data.polished} answers polished` : '';
+    showToast(`Excel loaded: ${data.entries} items, ${data.images} images${extra}`, 'success');
     loadOverview();
   } catch (err) {
     console.error(err);
-    showToast('Fout bij het laden van Excel', 'error');
+    showToast('Error loading Excel', 'error');
   } finally {
     btn.disabled = false;
     if (otherBtn) otherBtn.disabled = false;
@@ -2069,7 +2069,7 @@ function animateCount(el, target, suffix = '') {
 
 /* ─── Chart colors ────────────────────────────────────────── */
 const CHART_COLORS = ['#0e7ac4','#3ea5d8','#10b981','#f59e0b','#8b5cf6','#ec4899','#ef4444','#84cc16'];
-const LANG_LABELS = { en: 'English', nl: 'Nederlands', fr: 'Français', de: 'Deutsch' };
+const LANG_LABELS = { en: 'English', nl: 'Dutch', fr: 'French', de: 'German' };
 
 /* ─── Overview ────────────────────────────────────────────── */
 async function loadOverview() {
@@ -2080,7 +2080,7 @@ async function loadOverview() {
   } catch (e) {
     console.warn('Overview load error:', e);
     if (String(e && e.message) !== 'Unauthorized') {
-      showToast('Kan overzichtsdata niet laden', 'error');
+      showToast('Could not load overview data', 'error');
     }
   }
 }
@@ -2092,7 +2092,7 @@ function renderLangHero(langDist) {
   const barsEl = document.getElementById('hero-lang-bars');
   const entries = Object.entries(langDist).filter(([, v]) => (v || 0) > 0);
   if (entries.length === 0) {
-    codeEl.textContent = '—'; pctEl.textContent = ''; subEl.textContent = 'Nog geen data';
+    codeEl.textContent = '—'; pctEl.textContent = ''; subEl.textContent = 'No data yet';
     barsEl.innerHTML = '';
     return;
   }
@@ -2102,7 +2102,7 @@ function renderLangHero(langDist) {
   const topPct = Math.round((topCount / total) * 100);
   codeEl.textContent = (topCode || '').toUpperCase();
   pctEl.textContent = `${topPct}%`;
-  subEl.textContent = `${LANG_LABELS[topCode] || topCode} — ${topCount} op ${total} vragen`;
+  subEl.textContent = `${LANG_LABELS[topCode] || topCode} — ${topCount} of ${total} questions`;
 
   const order = ['en', 'nl', 'fr', 'de'];
   const map = Object.fromEntries(entries);
@@ -2122,7 +2122,7 @@ function renderLangHero(langDist) {
 function renderOverviewTopQuestions(topQ) {
   const container = document.getElementById('overview-top-q');
   if (!topQ || topQ.length === 0) {
-    container.innerHTML = '<div class="empty-state" style="padding:20px 0;"><div class="empty-state-icon">📭</div><div class="empty-state-text">Nog geen vragen in deze periode.</div></div>';
+    container.innerHTML = '<div class="empty-state" style="padding:20px 0;"><div class="empty-state-icon">📭</div><div class="empty-state-text">No questions in this period yet.</div></div>';
     return;
   }
   const maxCount = Math.max(...topQ.map(q => q.count || 0)) || 1;
@@ -2147,20 +2147,20 @@ function copyQuestion(q) {
   if (!q) return;
   try {
     navigator.clipboard.writeText(q);
-    showToast('Vraag gekopieerd', 'success');
+    showToast('Question copied', 'success');
   } catch(e) { /* ignore */ }
 }
 
 /* ─── FAQ Manager ─────────────────────────────────────────── */
 async function loadFaqManager() {
-  document.getElementById('faq-table-wrap').innerHTML = '<div class="loading-state"><div class="spinner"></div><span>Laden…</span></div>';
+  document.getElementById('faq-table-wrap').innerHTML = '<div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>';
   try {
     const data = await API.get('/admin/faq');
     allFaqs = Array.isArray(data) ? data : (data.faqs || data.items || []);
     filterFaqs();
   } catch (e) {
     console.warn('FAQ load error:', e);
-    showToast('Kan FAQ niet laden', 'error');
+    showToast('Could not load FAQ', 'error');
     allFaqs = [];
     filterFaqs();
   }
@@ -2196,8 +2196,8 @@ function renderFaqTable() {
   if (total === 0) {
     wrap.innerHTML = `<div class="empty-state">
       <div class="empty-state-icon">📭</div>
-      <div class="empty-state-title">Geen item gevonden</div>
-      <div class="empty-state-text">Pas uw zoekopdracht aan of maak een nieuw FAQ-item aan.</div>
+      <div class="empty-state-title">No items found</div>
+      <div class="empty-state-text">Adjust your search or create a new FAQ item.</div>
     </div>`;
     document.getElementById('faq-pagination').innerHTML = '';
     return;
@@ -2219,9 +2219,9 @@ function renderFaqTable() {
       <td class="td-truncate" style="max-width:300px;color:var(--text-secondary);" title="${escHtml(answer)}">${escHtml(answer)}</td>
       <td style="width:100px;">
         <div class="table-actions">
-          <button class="btn-icon" title="Bekijken" onclick="openViewModal('${escAttr(id)}')">👁</button>
-          <button class="btn-icon" title="Bewerken" onclick="openEditModal('${escAttr(id)}')">✏️</button>
-          <button class="btn-icon danger" title="Verwijderen" onclick="deleteFaq('${escAttr(id)}')">🗑</button>
+          <button class="btn-icon" title="View" onclick="openViewModal('${escAttr(id)}')">👁</button>
+          <button class="btn-icon" title="Edit" onclick="openEditModal('${escAttr(id)}')">✏️</button>
+          <button class="btn-icon danger" title="Delete" onclick="deleteFaq('${escAttr(id)}')">🗑</button>
         </div>
       </td>
     </tr>`;
@@ -2230,10 +2230,10 @@ function renderFaqTable() {
   wrap.innerHTML = `<table>
     <thead>
       <tr>
-        <th>Categorie</th>
-        <th>Vraag</th>
-        <th>Antwoord</th>
-        <th>Acties</th>
+        <th>Category</th>
+        <th>Question</th>
+        <th>Answer</th>
+        <th>Actions</th>
       </tr>
     </thead>
     <tbody>${rows}</tbody>
@@ -2305,8 +2305,8 @@ function clearFaqForm() {
 function openCreateModal(prefill = '') {
   editingId = null;
   clearFaqForm();
-  document.getElementById('modal-faq-title').textContent = 'Nieuwe FAQ-vermelding';
-  document.getElementById('faq-submit-btn').textContent = 'Opslaan';
+  document.getElementById('modal-faq-title').textContent = 'New FAQ entry';
+  document.getElementById('faq-submit-btn').textContent = 'Save';
   if (prefill) {
     document.getElementById('faq-question').value = prefill;
   }
@@ -2316,11 +2316,11 @@ function openCreateModal(prefill = '') {
 
 function openEditModal(id) {
   const faq = allFaqs.find(f => String(f.id || f._id) === String(id));
-  if (!faq) { showToast('Item niet gevonden', 'error'); return; }
+  if (!faq) { showToast('Item not found', 'error'); return; }
 
   editingId = id;
-  document.getElementById('modal-faq-title').textContent = 'FAQ-vermelding bewerken';
-  document.getElementById('faq-submit-btn').textContent = 'Bijwerken';
+  document.getElementById('modal-faq-title').textContent = 'Edit FAQ entry';
+  document.getElementById('faq-submit-btn').textContent = 'Update';
   document.getElementById('faq-cat').value = faq.category || faq.categorie || '';
   document.getElementById('faq-question').value = faq.question || '';
   document.getElementById('faq-answer').value = faq.answer || faq.response || '';
@@ -2332,24 +2332,24 @@ function openEditModal(id) {
 
 function openViewModal(id) {
   const faq = allFaqs.find(f => String(f.id || f._id) === String(id));
-  if (!faq) { showToast('Item niet gevonden', 'error'); return; }
+  if (!faq) { showToast('Item not found', 'error'); return; }
 
   const tags = Array.isArray(faq.tags) ? faq.tags : (faq.tags ? faq.tags.split(',').map(t => t.trim()) : []);
   const tagsHtml = tags.length
     ? `<div class="detail-tags">${tags.map(t => `<span class="detail-tag">${escHtml(t)}</span>`).join('')}</div>`
-    : '<span style="color:var(--text-secondary);font-size:13px;">Geen tags</span>';
+    : '<span style="color:var(--text-secondary);font-size:13px;">No tags</span>';
 
   document.getElementById('modal-view-body').innerHTML = `
     <div class="detail-field">
-      <div class="detail-label">Categorie</div>
+      <div class="detail-label">Category</div>
       <div class="detail-value"><span class="badge badge-cat">${escHtml(faq.category || faq.categorie || '—')}</span></div>
     </div>
     <div class="detail-field">
-      <div class="detail-label">Vraag</div>
+      <div class="detail-label">Question</div>
       <div class="detail-value">${escHtml(faq.question || '—')}</div>
     </div>
     <div class="detail-field">
-      <div class="detail-label">Antwoord</div>
+      <div class="detail-label">Answer</div>
       <div class="detail-value" style="white-space:pre-wrap;">${escHtml(faq.answer || faq.response || '—')}</div>
     </div>
     ${faq.video_url || faq.video ? `
@@ -2374,8 +2374,8 @@ async function submitFaqForm() {
   const tagsRaw = document.getElementById('faq-tags').value.trim();
   const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
 
-  if (!question) { showToast('Vraag is verplicht', 'error'); return; }
-  if (!answer) { showToast('Antwoord is verplicht', 'error'); return; }
+  if (!question) { showToast('Question is required', 'error'); return; }
+  if (!answer) { showToast('Answer is required', 'error'); return; }
 
   const payload = {
     category: cat, categorie: cat, question, answer, response: answer,
@@ -2389,33 +2389,33 @@ async function submitFaqForm() {
   try {
     if (editingId) {
       await API.put(`/admin/faq/${editingId}`, payload);
-      showToast('Item succesvol bijgewerkt', 'success');
+      showToast('Item updated successfully', 'success');
     } else {
       await API.post('/admin/faq', payload);
-      showToast('Nieuw item aangemaakt', 'success');
+      showToast('New item created', 'success');
     }
     closeModal('modal-faq');
     await loadFaqManager();
     await loadOverview();
   } catch (e) {
     console.warn('Save error:', e);
-    showToast('Fout bij opslaan', 'error');
+    showToast('Save error', 'error');
   } finally {
     btn.disabled = false;
-    btn.textContent = editingId ? 'Bijwerken' : 'Opslaan';
+    btn.textContent = editingId ? 'Update' : 'Save';
   }
 }
 
 async function deleteFaq(id) {
-  if (!confirm('FAQ-item verwijderen? Deze actie kan niet ongedaan worden gemaakt.')) return;
+  if (!confirm('Delete this FAQ item? This action cannot be undone.')) return;
   try {
     await API.del(`/admin/faq/${id}`);
-    showToast('Item verwijderd', 'success');
+    showToast('Item deleted', 'success');
     await loadFaqManager();
     await loadOverview();
   } catch (e) {
     console.warn('Delete error:', e);
-    showToast('Fout bij verwijderen', 'error');
+    showToast('Delete failed', 'error');
   }
 }
 
@@ -2440,8 +2440,8 @@ async function loadGaps() {
     if (gaps.length === 0) {
       container.innerHTML = `<div class="empty-state">
         <div class="empty-state-icon">✅</div>
-        <div class="empty-state-title">Volledige dekking!</div>
-        <div class="empty-state-text">De chatbot beantwoordt alle vragen. Geen hiaten gedetecteerd.</div>
+        <div class="empty-state-title">Full coverage!</div>
+        <div class="empty-state-text">The chatbot answers every question. No gaps detected.</div>
       </div>`;
       return;
     }
@@ -2452,9 +2452,9 @@ async function loadGaps() {
       const prio = (g.priority || '').toUpperCase();
       let badgeHtml = '';
       if (prio === 'HAUTE' || prio === 'HIGH' || prio === 'HOOG') {
-        badgeHtml = '<span class="badge badge-high">HOOG</span>';
+        badgeHtml = '<span class="badge badge-high">HIGH</span>';
       } else if (prio === 'MOYENNE' || prio === 'MEDIUM' || prio === 'GEMIDDELD') {
-        badgeHtml = '<span class="badge badge-medium">GEMIDDELD</span>';
+        badgeHtml = '<span class="badge badge-medium">MEDIUM</span>';
       }
       return `<div class="gap-card">
         <div class="gap-card-header">
@@ -2462,9 +2462,9 @@ async function loadGaps() {
           ${badgeHtml}
         </div>
         <div class="gap-card-footer">
-          <span class="gap-asked">${count} keer gevraagd</span>
+          <span class="gap-asked">asked ${count} time${count === 1 ? '' : 's'}</span>
           <button class="btn btn-primary btn-sm" onclick="addGapToFaq(${JSON.stringify(question).replace(/'/g, '&#39;')})">
-            ➕ Toevoegen aan FAQ
+            ➕ Add to FAQ
           </button>
         </div>
       </div>`;
@@ -2476,8 +2476,8 @@ async function loadGaps() {
     console.warn('Gaps load error:', e);
     container.innerHTML = `<div class="empty-state">
       <div class="empty-state-icon">⚠️</div>
-      <div class="empty-state-title">Gegevens niet beschikbaar</div>
-      <div class="empty-state-text">Kan onbeantwoorde vragen niet laden. Controleer de API-verbinding.</div>
+      <div class="empty-state-title">Data unavailable</div>
+      <div class="empty-state-text">Could not load unanswered questions. Check the API connection.</div>
     </div>`;
   }
 }
