@@ -20,7 +20,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 # Model Configuration
-LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")  # Claude for language detection & translation
+LLM_MODEL = os.getenv("LLM_MODEL", "claude-3-5-haiku-20241022")  # Claude for language detection & translation
 EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "text-embedding-3-large")  # OpenAI for embeddings
 
 # Validate API keys
