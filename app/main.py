@@ -3349,6 +3349,51 @@ async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
 
 
 # ---------------------------------------------------------------------
+# Admin: full FAQ dump (all fields incl. translations) for the table editor
+# ---------------------------------------------------------------------
+@app.get("/admin/faq/full")
+def admin_faq_full(_auth: bool = Depends(require_admin)):
+    """Return the raw JSONL contents (all fields, all languages) for the
+    Excel-style table editor. Each entry keeps its original keys."""
+    items: List[Dict[str, Any]] = []
+    if os.path.exists(_FAQ_FALLBACK_JSONL):
+        with open(_FAQ_FALLBACK_JSONL, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    items.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return {"ok": True, "count": len(items), "rows": items}
+
+
+# ---------------------------------------------------------------------
+# Admin: standalone image upload for FAQ table cells
+# ---------------------------------------------------------------------
+@app.post("/admin/faq/image-upload")
+async def admin_faq_image_upload(request: Request, _auth: bool = Depends(require_admin)):
+    """Upload one image; returns its public URL (e.g. /faq_images/manual_<ts>.png)."""
+    form = await request.form()
+    image = form.get("image") or form.get("file")
+    if image is None or not getattr(image, "filename", ""):
+        raise HTTPException(status_code=400, detail="image file required")
+    img_bytes = await image.read()
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="empty file")
+    images_dir = os.path.join(_PROJECT_ROOT, "app", "data", "faq_images")
+    os.makedirs(images_dir, exist_ok=True)
+    ext = os.path.splitext(image.filename)[1].lower() or ".png"
+    if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        ext = ".png"
+    fname = f"manual_{int(time.time() * 1000)}{ext}"
+    with open(os.path.join(images_dir, fname), "wb") as f:
+        f.write(img_bytes)
+    return {"ok": True, "url": f"/faq_images/{fname}", "filename": fname}
+
+
+# ---------------------------------------------------------------------
 # Admin: Lexicon (untranslatable / brand-protected terms)
 # ---------------------------------------------------------------------
 @app.get("/admin/lexicon")

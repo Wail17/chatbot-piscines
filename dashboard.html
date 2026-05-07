@@ -1405,6 +1405,270 @@
       border-top: 1px solid var(--border);
     }
 
+    /* ── Excel-style FAQ table ─────────────────────────────── */
+    .ftbl-wrap {
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(14px);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 32px rgba(14,122,196,0.06);
+      overflow: hidden;
+    }
+    .ftbl-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(238,248,253,0.6);
+    }
+    .ftbl-toolbar .grow { flex: 1; min-width: 0; }
+    .ftbl-search {
+      position: relative;
+      max-width: 280px;
+    }
+    .ftbl-search input {
+      width: 100%;
+      padding: 8px 10px 8px 32px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      font-family: inherit;
+    }
+    .ftbl-search::before {
+      content: '🔍';
+      position: absolute;
+      top: 50%; left: 10px;
+      transform: translateY(-50%);
+      font-size: 12px;
+      pointer-events: none;
+    }
+    .ftbl-btn {
+      padding: 8px 14px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-weight: 500;
+      font-family: inherit;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    .ftbl-btn:hover { border-color: var(--ocean-500, #0e7ac4); color: var(--ocean-500, #0e7ac4); }
+    .ftbl-btn.primary {
+      background: linear-gradient(135deg, var(--ocean-500, #0e7ac4), var(--ocean-600, #0960a0));
+      color: #fff;
+      border-color: transparent;
+    }
+    .ftbl-btn.primary:hover { box-shadow: 0 4px 14px rgba(14,122,196,0.32); color: #fff; }
+    .ftbl-btn.danger { color: #c0392b; }
+    .ftbl-btn.danger:hover { border-color: #c0392b; }
+
+    .ftbl-status {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .ftbl-status .dirty {
+      color: #d97706;
+      font-weight: 600;
+    }
+
+    .ftbl-scroll {
+      overflow: auto;
+      max-height: calc(100vh - 230px);
+      position: relative;
+    }
+    .ftbl {
+      border-collapse: separate;
+      border-spacing: 0;
+      width: max-content;
+      min-width: 100%;
+      font-size: 12.5px;
+      font-family: 'Segoe UI', Inter, system-ui, sans-serif;
+    }
+    .ftbl th, .ftbl td {
+      border-right: 1px solid #d4dce4;
+      border-bottom: 1px solid #d4dce4;
+      padding: 0;
+      vertical-align: top;
+      background: #fff;
+    }
+    .ftbl thead th {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: #f1f6fb;
+      color: #1c4a6e;
+      font-weight: 600;
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 2px solid #b9cee0;
+      white-space: nowrap;
+    }
+    .ftbl thead th.col-num,
+    .ftbl tbody td.col-num {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      width: 50px;
+      min-width: 50px;
+      text-align: center;
+      background: #f1f6fb;
+      color: #6b89a4;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 4px;
+    }
+    .ftbl thead th.col-num { z-index: 4; }
+    .ftbl tbody tr.modified td.col-num { background: #fef3c7; color: #92400e; }
+    .ftbl tbody tr.modified td:not(.col-num) { background: #fffbeb; }
+    .ftbl tbody tr.is-new td:not(.col-num) { background: #ecfdf5; }
+    .ftbl tbody tr.is-new td.col-num { background: #d1fae5; color: #065f46; }
+    .ftbl tbody tr:hover td:not(.col-num) { background: #f8fbfe; }
+    .ftbl tbody tr.modified:hover td:not(.col-num) { background: #fef9e0; }
+    .ftbl tbody tr.is-new:hover td:not(.col-num) { background: #d4f4e1; }
+
+    .ftbl td .cell-edit {
+      width: 100%;
+      min-height: 28px;
+      padding: 6px 8px;
+      border: none;
+      outline: none;
+      background: transparent;
+      font-family: inherit;
+      font-size: 12.5px;
+      color: var(--text-primary);
+      resize: vertical;
+      box-sizing: border-box;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .ftbl td textarea.cell-edit { min-height: 60px; max-height: 240px; }
+    .ftbl td .cell-edit:focus {
+      box-shadow: inset 0 0 0 2px var(--ocean-500, #0e7ac4);
+      background: #fff;
+    }
+    .ftbl tbody td.dirty-cell { box-shadow: inset 3px 0 0 #f59e0b; }
+
+    .ftbl td.col-cat .cell-edit { width: 140px; min-width: 140px; }
+    .ftbl td.col-vraag .cell-edit { width: 240px; min-width: 240px; }
+    .ftbl td.col-antwoord .cell-edit { width: 360px; min-width: 360px; }
+    .ftbl td.col-video .cell-edit { width: 200px; min-width: 200px; }
+
+    .ftbl td.col-img {
+      width: 140px;
+      padding: 6px;
+    }
+    .img-cell {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-items: center;
+      min-height: 36px;
+      cursor: pointer;
+      padding: 2px;
+      border-radius: 6px;
+    }
+    .img-cell:hover { background: #eef8fd; }
+    .img-cell .thumb {
+      width: 36px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .img-cell .more-pill {
+      font-size: 10px;
+      background: var(--ocean-500, #0e7ac4);
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+    .img-cell .empty-img {
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-style: italic;
+    }
+
+    .ftbl td.col-actions {
+      width: 56px;
+      text-align: center;
+      padding: 6px;
+    }
+    .ftbl td.col-actions button {
+      background: none;
+      border: 1px solid var(--border);
+      width: 30px;
+      height: 30px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #c0392b;
+    }
+    .ftbl td.col-actions button:hover { background: #fee2e2; border-color: #fca5a5; }
+
+    /* Translation columns */
+    .ftbl th.col-trans, .ftbl td.col-trans { background: #f8fafc; }
+    .ftbl thead th.col-trans { background: #e0f2fe; color: #075985; }
+
+    /* Image manager modal */
+    .img-modal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .img-modal-item {
+      position: relative;
+      aspect-ratio: 1;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .img-modal-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .img-modal-remove {
+      position: absolute;
+      top: 4px; right: 4px;
+      background: rgba(220,38,38,0.92);
+      color: #fff;
+      border: none;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .img-drop {
+      border: 2px dashed var(--ocean-500, #0e7ac4);
+      border-radius: 10px;
+      padding: 20px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .img-drop:hover, .img-drop.over { background: #eef8fd; }
+
+    /* Lexicon table */
+    .lex-wrap { background: rgba(255,255,255,0.85); backdrop-filter: blur(14px); border-radius: var(--radius); border: 1px solid var(--border); padding: 18px; }
+    .lex-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    .lex-table th, .lex-table td { padding: 10px; text-align: left; border-bottom: 1px solid var(--border); }
+    .lex-table th { background: #f1f6fb; color: #1c4a6e; font-weight: 600; font-size: 12px; }
+    .lex-table input { width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 13px; }
+    .lex-table input:focus { outline: none; border-color: var(--ocean-500, #0e7ac4); box-shadow: 0 0 0 2px rgba(14,122,196,0.1); }
+    .lex-table tr.modified td { background: #fffbeb; }
+    .lex-table .lex-actions { width: 60px; text-align: center; }
+
     /* ── Hamburger + mobile drawer ─────────────────────────── */
     .hamburger {
       display: none;
@@ -1517,6 +1781,14 @@
         <span class="nav-icon">📊</span>
         <span>Overview</span>
       </div>
+      <div class="nav-item" onclick="showSection('table')" id="nav-table">
+        <span class="nav-icon">📋</span>
+        <span>FAQ Table</span>
+      </div>
+      <div class="nav-item" onclick="showSection('lexicon')" id="nav-lexicon">
+        <span class="nav-icon">📖</span>
+        <span>Lexicon</span>
+      </div>
       <div class="nav-item" onclick="showSection('gaps')" id="nav-gaps">
         <span class="nav-icon">❓</span>
         <span>Unanswered questions</span>
@@ -1620,6 +1892,110 @@
           </div>
           <div id="overview-top-q">
             <div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: FAQ Table (Excel-style)
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-table">
+        <div class="section-header">
+          <h2>FAQ Table 📋</h2>
+          <p>Edit questions and answers in Excel-style. Translations are generated automatically (NL → EN/FR/DE) when you save.</p>
+        </div>
+
+        <div class="ftbl-wrap">
+          <div class="ftbl-toolbar">
+            <div class="ftbl-search">
+              <input type="text" id="ftbl-search" placeholder="Search question, answer, category…" oninput="filterFaqTable(this.value)" />
+            </div>
+            <button class="ftbl-btn" onclick="addNewFaqRow()"><span>＋</span> New row</button>
+            <label class="ftbl-btn" style="cursor:pointer;">
+              <input type="checkbox" id="ftbl-show-trans" style="margin-right:6px;" onchange="toggleTranslationCols(this.checked)" />
+              👁 Show translations (EN / FR / DE)
+            </label>
+            <span class="grow"></span>
+            <span class="ftbl-status" id="ftbl-status">—</span>
+            <button class="ftbl-btn primary" onclick="saveFaqTable()" id="ftbl-save-btn">✅ Confirm &amp; re-index</button>
+          </div>
+          <div class="ftbl-scroll">
+            <table class="ftbl" id="ftbl">
+              <thead>
+                <tr>
+                  <th class="col-num">#</th>
+                  <th class="col-cat">Category</th>
+                  <th class="col-vraag">Question (NL)</th>
+                  <th class="col-antwoord">Answer (NL)</th>
+                  <th class="col-video">Video URL</th>
+                  <th class="col-img">Images</th>
+                  <th class="col-trans" data-trans>EN Q</th>
+                  <th class="col-trans" data-trans>EN A</th>
+                  <th class="col-trans" data-trans>FR Q</th>
+                  <th class="col-trans" data-trans>FR A</th>
+                  <th class="col-trans" data-trans>DE Q</th>
+                  <th class="col-trans" data-trans>DE A</th>
+                  <th class="col-actions"></th>
+                </tr>
+              </thead>
+              <tbody id="ftbl-body">
+                <tr><td colspan="13" style="padding:30px;text-align:center;color:var(--text-secondary);">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: Lexicon (untranslatable terms)
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-lexicon">
+        <div class="section-header">
+          <h2>Lexicon 📖</h2>
+          <p>Brand names, product names and other terms that must NOT be translated. They stay verbatim across all languages when saving the FAQ table.</p>
+        </div>
+        <div class="lex-wrap">
+          <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+            <button class="ftbl-btn" onclick="addLexiconRow()"><span>＋</span> New term</button>
+            <span style="flex:1;"></span>
+            <span class="ftbl-status" id="lex-status">—</span>
+            <button class="ftbl-btn primary" onclick="saveLexicon()" id="lex-save-btn">✅ Save lexicon</button>
+          </div>
+          <table class="lex-table">
+            <thead>
+              <tr>
+                <th style="width:200px;">Term</th>
+                <th>Note (why is it untranslatable?)</th>
+                <th class="lex-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="lex-body">
+              <tr><td colspan="3" style="padding:30px;text-align:center;color:var(--text-secondary);">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══════════════════════════════════════════════════
+           IMAGE MANAGER MODAL (FAQ row images)
+      ═══════════════════════════════════════════════════ -->
+      <div class="modal-overlay" id="modal-images" onclick="handleOverlayClick(event,'modal-images')" style="display:none;">
+        <div class="modal modal-lg">
+          <div class="modal-header">
+            <span class="modal-title">📷 Manage row images</span>
+            <button class="modal-close" onclick="closeImageManager()">✕</button>
+          </div>
+          <div class="modal-body">
+            <div id="img-modal-grid" class="img-modal-grid"></div>
+            <label class="img-drop" for="img-modal-input">
+              <div style="font-size:24px;margin-bottom:6px;">📤</div>
+              <div>Click here or drop images to upload (PNG / JPG)</div>
+            </label>
+            <input type="file" id="img-modal-input" accept="image/*" multiple style="display:none;" onchange="onModalImagesPicked(this)" />
+          </div>
+          <div class="modal-footer">
+            <button class="ftbl-btn" onclick="closeImageManager()">Cancel</button>
+            <button class="ftbl-btn primary" onclick="confirmImageManager()">✅ Apply</button>
           </div>
         </div>
       </div>
@@ -1861,7 +2237,9 @@ const API = {
 
 /* ─── Navigation ──────────────────────────────────────────── */
 const SECTION_TITLES = {
-  overview: 'Overzicht',
+  overview: 'Overview',
+  table: 'FAQ Table 📋',
+  lexicon: 'Lexicon 📖',
   gaps: 'Unanswered questions ❓'
 };
 
@@ -1876,6 +2254,8 @@ function showSection(name) {
   currentSection = name;
 
   if (name === 'overview') loadOverview();
+  if (name === 'table') loadFaqTable();
+  if (name === 'lexicon') loadLexicon();
   if (name === 'gaps') loadGaps();
 }
 
@@ -2488,6 +2868,406 @@ function addGapToFaq(question) {
     const q = document.getElementById('qa-question');
     if (q) { q.value = question || ''; q.focus(); }
   }, 80);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FAQ TABLE (Excel-style editor)
+═══════════════════════════════════════════════════════════ */
+let _ftblRows = [];          // current rows (data model)
+let _ftblOriginal = new Map(); // id -> { vraag, antwoord } snapshot for change detection
+let _ftblSeq = 0;
+let _imgModalRowId = null;
+let _imgModalImages = [];
+
+function _newFaqRowId() { return 'new-' + (++_ftblSeq); }
+
+function _normalizeFaqEntry(raw, idx) {
+  const id = raw.id || raw._id || ('id-' + idx);
+  return {
+    id,
+    excel_row: raw.excel_row || null,
+    category: raw.category || raw.categorie || raw.Categorie || '',
+    question: raw.question || raw.vraag || raw.Vraag || '',
+    answer: raw.answer || raw.antwoord || raw.Antwoord || raw.response || '',
+    video_url: raw.video_url || raw.video || raw.Filmpje || '',
+    image_paths: Array.isArray(raw.image_paths) ? raw.image_paths.slice()
+      : (raw.image_path ? [raw.image_path] : []),
+    alt_questions: Array.isArray(raw.alt_questions) ? raw.alt_questions.slice() : [],
+    tags: Array.isArray(raw.tags) ? raw.tags.slice() : [],
+    en_question: raw.ENQuestion || raw.en_question || '',
+    en_answer: raw.ENAnswer || raw.en_answer || '',
+    fr_question: raw.FRQuestion || raw.fr_question || '',
+    fr_answer: raw.FRReponse || raw.fr_answer || raw.fr_reponse || '',
+    de_question: raw.DEFrage || raw.de_question || raw.de_frage || '',
+    de_answer: raw.DEAntwort || raw.de_answer || raw.de_antwort || '',
+    _isNew: false,
+    _modified: false
+  };
+}
+
+async function loadFaqTable() {
+  const body = document.getElementById('ftbl-body');
+  body.innerHTML = '<tr><td colspan="13" style="padding:30px;text-align:center;color:var(--text-secondary);">Loading…</td></tr>';
+  try {
+    const data = await API.get('/admin/faq/full');
+    const items = (data && data.rows) || [];
+    _ftblRows = items.map((r, i) => _normalizeFaqEntry(r, i));
+    _ftblOriginal = new Map();
+    for (const r of _ftblRows) {
+      _ftblOriginal.set(r.id, {
+        question: r.question, answer: r.answer,
+        category: r.category, video_url: r.video_url,
+        image_paths: r.image_paths.join('|'),
+        en_question: r.en_question, en_answer: r.en_answer,
+        fr_question: r.fr_question, fr_answer: r.fr_answer,
+        de_question: r.de_question, de_answer: r.de_answer
+      });
+    }
+    renderFaqTable();
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<tr><td colspan="13" style="padding:30px;text-align:center;color:#c0392b;">Could not load FAQ table</td></tr>';
+  }
+}
+
+function renderFaqTable() {
+  const body = document.getElementById('ftbl-body');
+  const showTrans = document.getElementById('ftbl-show-trans')?.checked;
+  if (_ftblRows.length === 0) {
+    body.innerHTML = '<tr><td colspan="13" style="padding:30px;text-align:center;color:var(--text-secondary);">No entries yet. Click "+ New row" to add one.</td></tr>';
+    updateFtblStatus();
+    return;
+  }
+  const html = _ftblRows.map((r, i) => _renderFaqRow(r, i)).join('');
+  body.innerHTML = html;
+  toggleTranslationCols(!!showTrans);
+  updateFtblStatus();
+}
+
+function _renderFaqRow(r, i) {
+  const cls = [];
+  if (r._isNew) cls.push('is-new');
+  else if (r._modified) cls.push('modified');
+  const dataId = escAttr(r.id);
+  const imgsHtml = r.image_paths.length === 0
+    ? '<span class="empty-img">click to add</span>'
+    : r.image_paths.slice(0, 3).map(u => `<img src="${escAttr(u)}" class="thumb" alt="" />`).join('') +
+      (r.image_paths.length > 3 ? `<span class="more-pill">+${r.image_paths.length - 3}</span>` : '');
+  return `
+    <tr data-id="${dataId}" class="${cls.join(' ')}">
+      <td class="col-num">${i + 1}</td>
+      <td class="col-cat"><textarea class="cell-edit" rows="1" data-field="category">${escHtml(r.category)}</textarea></td>
+      <td class="col-vraag"><textarea class="cell-edit" rows="2" data-field="question">${escHtml(r.question)}</textarea></td>
+      <td class="col-antwoord"><textarea class="cell-edit" rows="3" data-field="answer">${escHtml(r.answer)}</textarea></td>
+      <td class="col-video"><textarea class="cell-edit" rows="1" data-field="video_url" placeholder="https://youtube.com/…">${escHtml(r.video_url)}</textarea></td>
+      <td class="col-img"><div class="img-cell" onclick="openImageManager('${dataId}')">${imgsHtml}</div></td>
+      <td class="col-trans" data-trans><textarea class="cell-edit" rows="2" data-field="en_question">${escHtml(r.en_question)}</textarea></td>
+      <td class="col-trans" data-trans><textarea class="cell-edit" rows="3" data-field="en_answer">${escHtml(r.en_answer)}</textarea></td>
+      <td class="col-trans" data-trans><textarea class="cell-edit" rows="2" data-field="fr_question">${escHtml(r.fr_question)}</textarea></td>
+      <td class="col-trans" data-trans><textarea class="cell-edit" rows="3" data-field="fr_answer">${escHtml(r.fr_answer)}</textarea></td>
+      <td class="col-trans" data-trans><textarea class="cell-edit" rows="2" data-field="de_question">${escHtml(r.de_question)}</textarea></td>
+      <td class="col-trans" data-trans><textarea class="cell-edit" rows="3" data-field="de_answer">${escHtml(r.de_answer)}</textarea></td>
+      <td class="col-actions"><button onclick="deleteFaqRow('${dataId}')" title="Delete row">🗑</button></td>
+    </tr>`;
+}
+
+document.addEventListener('input', (e) => {
+  const ta = e.target;
+  if (!ta.classList || !ta.classList.contains('cell-edit')) return;
+  const tr = ta.closest('tr[data-id]');
+  if (!tr) return;
+  const id = tr.dataset.id;
+  const field = ta.dataset.field;
+  const row = _ftblRows.find(r => r.id === id);
+  if (!row) return;
+  row[field] = ta.value;
+  row._modified = true;
+  if (!row._isNew) tr.classList.add('modified');
+  ta.parentElement?.classList.add('dirty-cell');
+  updateFtblStatus();
+});
+
+function toggleTranslationCols(on) {
+  document.querySelectorAll('#ftbl [data-trans]').forEach(el => {
+    el.style.display = on ? '' : 'none';
+  });
+}
+
+function filterFaqTable(query) {
+  const q = (query || '').toLowerCase().trim();
+  document.querySelectorAll('#ftbl-body tr[data-id]').forEach(tr => {
+    if (!q) { tr.style.display = ''; return; }
+    const id = tr.dataset.id;
+    const r = _ftblRows.find(x => x.id === id);
+    if (!r) return;
+    const hay = (r.category + ' ' + r.question + ' ' + r.answer).toLowerCase();
+    tr.style.display = hay.includes(q) ? '' : 'none';
+  });
+}
+
+function addNewFaqRow() {
+  const id = _newFaqRowId();
+  _ftblRows.unshift({
+    id, excel_row: null,
+    category: '', question: '', answer: '', video_url: '',
+    image_paths: [], alt_questions: [], tags: [],
+    en_question: '', en_answer: '',
+    fr_question: '', fr_answer: '',
+    de_question: '', de_answer: '',
+    _isNew: true, _modified: true
+  });
+  renderFaqTable();
+  setTimeout(() => {
+    const firstInput = document.querySelector('#ftbl-body tr[data-id="' + id + '"] textarea[data-field="question"]');
+    if (firstInput) firstInput.focus();
+  }, 50);
+}
+
+function deleteFaqRow(id) {
+  const r = _ftblRows.find(x => x.id === id);
+  if (!r) return;
+  if (!confirm(`Delete row "${(r.question || '').slice(0,60) || '(empty)'}"?\n\nThis only marks it for deletion locally — click "Confirm & re-index" to apply.`)) return;
+  _ftblRows = _ftblRows.filter(x => x.id !== id);
+  renderFaqTable();
+}
+
+function _isRowDirty(r) {
+  if (r._isNew) return true;
+  const orig = _ftblOriginal.get(r.id);
+  if (!orig) return r._modified;
+  return r._modified || (
+    orig.question !== r.question || orig.answer !== r.answer ||
+    orig.category !== r.category || orig.video_url !== r.video_url ||
+    orig.image_paths !== r.image_paths.join('|') ||
+    orig.en_question !== r.en_question || orig.en_answer !== r.en_answer ||
+    orig.fr_question !== r.fr_question || orig.fr_answer !== r.fr_answer ||
+    orig.de_question !== r.de_question || orig.de_answer !== r.de_answer
+  );
+}
+
+function _needsTranslation(r) {
+  if (r._isNew) return true;
+  const orig = _ftblOriginal.get(r.id);
+  if (!orig) return true;
+  return orig.question !== r.question || orig.answer !== r.answer;
+}
+
+function updateFtblStatus() {
+  const total = _ftblRows.length;
+  const dirty = _ftblRows.filter(_isRowDirty).length;
+  const willTrans = _ftblRows.filter(_needsTranslation).length;
+  const el = document.getElementById('ftbl-status');
+  if (!el) return;
+  if (dirty === 0) {
+    el.innerHTML = `${total} entries · <span style="color:#0a8a3a;">all saved</span>`;
+  } else {
+    el.innerHTML = `${total} entries · <span class="dirty">${dirty} unsaved</span>` +
+      (willTrans > 0 ? ` · ${willTrans} will be auto-translated` : '');
+  }
+}
+
+async function saveFaqTable() {
+  const btn = document.getElementById('ftbl-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving + translating…'; }
+
+  const payload = {
+    rows: _ftblRows.map(r => ({
+      id: r._isNew ? null : r.id,
+      excel_row: r.excel_row || null,
+      category: r.category,
+      question: r.question,
+      answer: r.answer,
+      video_url: r.video_url || null,
+      image_paths: r.image_paths.slice(),
+      alt_questions: r.alt_questions.slice(),
+      tags: r.tags.slice(),
+      en_question: r.en_question || null,
+      en_answer: r.en_answer || null,
+      fr_question: r.fr_question || null,
+      fr_answer: r.fr_answer || null,
+      de_question: r.de_question || null,
+      de_answer: r.de_answer || null,
+      needs_translation: _needsTranslation(r)
+    }))
+  };
+
+  try {
+    const data = await API.post('/admin/faq/bulk-save', payload);
+    showToast(`Saved ${data.saved} entries (${data.translated} auto-translated). Re-indexed ${data.faq_loaded} items.`, 'success');
+    await loadFaqTable();
+  } catch (e) {
+    console.error(e);
+    showToast('Save failed: ' + (e.message || 'unknown error'), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Confirm & re-index'; }
+  }
+}
+
+/* ─── Image manager modal ─────────────────────────────────── */
+function openImageManager(rowId) {
+  const r = _ftblRows.find(x => x.id === rowId);
+  if (!r) return;
+  _imgModalRowId = rowId;
+  _imgModalImages = r.image_paths.slice();
+  _renderImageManager();
+  const m = document.getElementById('modal-images');
+  m.style.display = '';
+  m.classList.add('active');
+}
+
+function closeImageManager() {
+  _imgModalRowId = null;
+  _imgModalImages = [];
+  const m = document.getElementById('modal-images');
+  m.style.display = 'none';
+  m.classList.remove('active');
+}
+
+function _renderImageManager() {
+  const grid = document.getElementById('img-modal-grid');
+  if (_imgModalImages.length === 0) {
+    grid.innerHTML = '<div style="padding:20px;color:var(--text-secondary);text-align:center;font-size:13px;">No images yet</div>';
+    return;
+  }
+  grid.innerHTML = _imgModalImages.map((u, i) => `
+    <div class="img-modal-item">
+      <img src="${escAttr(u)}" alt="img ${i+1}" />
+      <button class="img-modal-remove" onclick="removeModalImage(${i})" title="Remove">✕</button>
+    </div>`).join('');
+}
+
+function removeModalImage(idx) {
+  _imgModalImages.splice(idx, 1);
+  _renderImageManager();
+}
+
+async function onModalImagesPicked(input) {
+  const files = Array.from(input.files || []);
+  input.value = '';
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue;
+    try {
+      const fd = new FormData();
+      fd.append('image', f);
+      const r = await fetch('/admin/faq/image-upload', {
+        method: 'POST',
+        headers: _authHeaders(),
+        body: fd
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      if (data && data.url) _imgModalImages.push(data.url);
+    } catch (e) {
+      showToast('Upload failed: ' + (e.message || ''), 'error');
+    }
+  }
+  _renderImageManager();
+}
+
+function confirmImageManager() {
+  if (!_imgModalRowId) return closeImageManager();
+  const r = _ftblRows.find(x => x.id === _imgModalRowId);
+  if (r) {
+    r.image_paths = _imgModalImages.slice();
+    r._modified = true;
+  }
+  closeImageManager();
+  renderFaqTable();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LEXICON
+═══════════════════════════════════════════════════════════ */
+let _lexRows = [];
+let _lexSeq = 0;
+
+async function loadLexicon() {
+  const body = document.getElementById('lex-body');
+  body.innerHTML = '<tr><td colspan="3" style="padding:30px;text-align:center;color:var(--text-secondary);">Loading…</td></tr>';
+  try {
+    const data = await API.get('/admin/lexicon');
+    _lexRows = (data.terms || []).map((t, i) => ({
+      _id: 'lex-' + (++_lexSeq),
+      term: t.term || '',
+      note: t.note || '',
+      _modified: false
+    }));
+    renderLexicon();
+  } catch (e) {
+    console.error(e);
+    body.innerHTML = '<tr><td colspan="3" style="padding:30px;text-align:center;color:#c0392b;">Could not load lexicon</td></tr>';
+  }
+}
+
+function renderLexicon() {
+  const body = document.getElementById('lex-body');
+  if (_lexRows.length === 0) {
+    body.innerHTML = '<tr><td colspan="3" style="padding:30px;text-align:center;color:var(--text-secondary);">No protected terms yet.</td></tr>';
+    updateLexStatus();
+    return;
+  }
+  body.innerHTML = _lexRows.map(r => `
+    <tr data-id="${escAttr(r._id)}" class="${r._modified ? 'modified' : ''}">
+      <td><input type="text" data-field="term" value="${escAttr(r.term)}" placeholder="e.g. Wifipool" /></td>
+      <td><input type="text" data-field="note" value="${escAttr(r.note)}" placeholder="e.g. Brand name — keep verbatim" /></td>
+      <td class="lex-actions"><button class="ftbl-btn danger" onclick="deleteLexiconRow('${escAttr(r._id)}')" style="padding:5px 10px;">🗑</button></td>
+    </tr>`).join('');
+  updateLexStatus();
+}
+
+document.addEventListener('input', (e) => {
+  const t = e.target;
+  if (!t.matches || !t.matches('#lex-body input')) return;
+  const tr = t.closest('tr[data-id]');
+  if (!tr) return;
+  const r = _lexRows.find(x => x._id === tr.dataset.id);
+  if (!r) return;
+  r[t.dataset.field] = t.value;
+  r._modified = true;
+  tr.classList.add('modified');
+  updateLexStatus();
+});
+
+function addLexiconRow() {
+  _lexRows.push({ _id: 'lex-' + (++_lexSeq), term: '', note: '', _modified: true });
+  renderLexicon();
+  setTimeout(() => {
+    const last = document.querySelector('#lex-body tr:last-child input[data-field="term"]');
+    if (last) last.focus();
+  }, 30);
+}
+
+function deleteLexiconRow(id) {
+  _lexRows = _lexRows.filter(r => r._id !== id);
+  renderLexicon();
+}
+
+function updateLexStatus() {
+  const dirty = _lexRows.filter(r => r._modified).length;
+  const el = document.getElementById('lex-status');
+  if (!el) return;
+  el.innerHTML = dirty === 0
+    ? `${_lexRows.length} terms · <span style="color:#0a8a3a;">all saved</span>`
+    : `${_lexRows.length} terms · <span class="dirty">${dirty} unsaved</span>`;
+}
+
+async function saveLexicon() {
+  const btn = document.getElementById('lex-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving…'; }
+  const payload = {
+    terms: _lexRows
+      .map(r => ({ term: r.term.trim(), note: r.note.trim() }))
+      .filter(r => r.term)
+  };
+  try {
+    const data = await API.post('/admin/lexicon', payload);
+    showToast(`Lexicon saved: ${data.count} terms`, 'success');
+    await loadLexicon();
+  } catch (e) {
+    showToast('Save failed: ' + (e.message || ''), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Save lexicon'; }
+  }
 }
 
 /* ─── Utils ───────────────────────────────────────────────── */
