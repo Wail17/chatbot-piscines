@@ -2691,10 +2691,9 @@ def chat(req: ChatRequest, request: Request):
         raise HTTPException(status_code=429, detail="Te veel verzoeken. Wacht even en probeer opnieuw.")
 
     # ── Query preprocessor: greetings / thanks / out-of-scope ───────────────
-    # Skip if the user has an active conversation OR a pending follow-up — short
-    # replies ("1", "oui", "gen 2") are meaningful follow-ups, not empty queries.
-    _has_pending_for_pre = bool(_PENDING_BY_CLIENT.get(client_id)) if client_id else False
-    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref and not _get_history(client_id) and not _has_pending_for_pre:
+    # Skip if the user has an active conversation — short replies ("1", "oui",
+    # "gen 2") are meaningful follow-ups, not empty/out-of-scope queries.
+    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref and not _get_history(client_id):
         try:
             processed = preprocess_query(q)
             if processed.immediate_response is not None:
@@ -2726,27 +2725,19 @@ def chat(req: ChatRequest, request: Request):
     if q:
         track_question(q, language=lang_code, source="api")
 
-    # ── Response cache (only for non-clarify requests AND no history AND no pending follow-up) ───
-    if q and not clarify_ref and not _get_history(client_id) and not _has_pending_for_pre:
+    # ── Response cache (only for non-clarify requests AND no conversation history) ───
+    if q and not clarify_ref and not _get_history(client_id):
         cache_key = normalize_for_cache(q)
         cached = cache_get(cache_key)
         if cached is not None:
             track_cache_hit(q)
             return cached
 
-    # ── Follow-up guard: if we asked a clarifying question on the previous turn
-    # (e.g. "Gen 1 of Gen 2?") and the user replies with a short choice
-    # ("1", "Gen 2", "first"…), bypass the EXPERT MODE so the legacy follow-up
-    # resolver below can route the answer to the right FAQ entry.
-    _has_pending_followup = bool(_PENDING_BY_CLIENT.get(client_id)) if client_id else False
-    _is_followup_reply = bool(q) and _looks_like_followup_choice(q)
-    _skip_expert = (not clarify_ref) and _has_pending_followup and _is_followup_reply
-
     # ----- EXPERT MODE (Claude Haiku 4.5 w/ full FAQ context + prompt cache) -----
     # Primary answer path: let the LLM act as a Wifipool/Beniferro expert that has
     # the full 308-row FAQ in its (cached) context, and generate a natural answer
     # in the user's language. Falls back to legacy cascade on any error.
-    if q and not clarify_ref and _FAQ and not _skip_expert:
+    if q and not clarify_ref and _FAQ:
         try:
             history = _get_history(client_id)
             ex = expert_answer(q, lang_code, _FAQ, history=history)
