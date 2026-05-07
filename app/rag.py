@@ -239,7 +239,7 @@ def _cached_translation(prompt: str) -> str:
 
 _EXPERT_FAQ_CONTEXT: Optional[str] = None
 _EXPERT_FAQ_CACHE_SIG: Optional[tuple] = None
-_EXPERT_MODEL = "claude-haiku-4-5-20251001"
+_EXPERT_MODEL = "claude-sonnet-4-6"
 
 _EXPERT_SYSTEM_BASE = (
     "You are the Wifipool/Beniferro pool expert assistant. Beniferro is a Belgian "

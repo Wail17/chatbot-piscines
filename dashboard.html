@@ -2909,7 +2909,7 @@ async function loadFaqTable() {
   const body = document.getElementById('ftbl-body');
   body.innerHTML = '<tr><td colspan="13" style="padding:30px;text-align:center;color:var(--text-secondary);">Loading…</td></tr>';
   try {
-    const data = await API.get('/admin/faq-table');
+    const data = await API.get('/admin/faq/full');
     const items = (data && data.rows) || [];
     _ftblRows = items.map((r, i) => _normalizeFaqEntry(r, i));
     _ftblOriginal = new Map();
