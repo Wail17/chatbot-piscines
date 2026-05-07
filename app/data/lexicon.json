@@ -1,9 +1,0 @@
-{
-  "terms": [
-    {"term": "Wifipool", "note": "Brand name — keep as-is in all languages"},
-    {"term": "Beniferro", "note": "Brand name — keep as-is in all languages"},
-    {"term": "GEN 1", "note": "Product generation — do not translate"},
-    {"term": "GEN 2", "note": "Product generation — do not translate"},
-    {"term": "Shelly", "note": "Hardware brand — keep as-is"}
-  ]
-}
