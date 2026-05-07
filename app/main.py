@@ -297,14 +297,24 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                 if video_str:
                     row["video_url"] = video_str
 
-                image_path = _coerce_str(
+                image_paths_list: List[str] = []
+                raw_paths = obj.get("image_paths") or obj.get("image_urls") or obj.get("images")
+                if isinstance(raw_paths, list):
+                    for p in raw_paths:
+                        s = _coerce_str(p)
+                        if s and s not in image_paths_list:
+                            image_paths_list.append(s)
+                single = _coerce_str(
                     obj.get("image_path")
                     or obj.get("image_url")
                     or obj.get("image")
                     or obj.get("Foto")
                 )
-                if image_path:
-                    row["image_path"] = image_path
+                if single and single not in image_paths_list:
+                    image_paths_list.append(single)
+                if image_paths_list:
+                    row["image_paths"] = image_paths_list
+                    row["image_path"] = image_paths_list[0]
 
                 alt_raw = obj.get("alt_questions") or obj.get("alternatieve_vragen") or []
                 if isinstance(alt_raw, list):
@@ -1307,12 +1317,23 @@ def _get_answer_in_language(row: dict, lang_code: str) -> Optional[str]:
 
 
 def _enrich_response_with_media(response: Dict[str, Any], row: Optional[dict]) -> Dict[str, Any]:
-    """Add image_url and video_url fields (when available) to a response dict."""
+    """Add image_url(s) and video_url fields (when available) to a response dict."""
     if not isinstance(row, dict) or not isinstance(response, dict):
         return response
-    image_path = (row.get("image_path") or "").strip()
-    if image_path and "image_url" not in response:
-        response["image_url"] = image_path
+    image_paths = row.get("image_paths")
+    if isinstance(image_paths, list):
+        cleaned = [p.strip() for p in image_paths if isinstance(p, str) and p.strip()]
+    else:
+        cleaned = []
+    if not cleaned:
+        single = (row.get("image_path") or "").strip()
+        if single:
+            cleaned = [single]
+    if cleaned:
+        if "image_urls" not in response:
+            response["image_urls"] = cleaned
+        if "image_url" not in response:
+            response["image_url"] = cleaned[0]
     video_url = (row.get("video_url") or "").strip()
     if video_url and "video_url" not in response:
         response["video_url"] = video_url

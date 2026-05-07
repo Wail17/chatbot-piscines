@@ -165,13 +165,13 @@ def _repair_answer(text: str) -> str:
     return text
 
 
-def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
+def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, List[str]]]:
     """
-    Parse xl/drawings/*.xml to map each drawing's embed rId -> row number.
-    Returns: {drawing_file_name: {row_number_0_indexed: rId_int}}
-    Only for the main "Alle vragen" sheet (drawing1.xml typically).
+    Parse xl/drawings/*.xml to map each drawing's row number -> list of embed rIds.
+    Returns: {drawing_file_name: {row_number_0_indexed: [rId, ...]}}
+    Multiple images on the same row are preserved in document order.
     """
-    drawing_rows: Dict[str, Dict[str, int]] = {}
+    drawing_rows: Dict[str, Dict[int, List[str]]] = {}
     try:
         with zipfile.ZipFile(xlsx_path) as z:
             for name in z.namelist():
@@ -182,7 +182,7 @@ def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
                     root = ET.fromstring(content)
                 except ET.ParseError:
                     continue
-                row_to_rid: Dict[int, str] = {}
+                row_to_rids: Dict[int, List[str]] = {}
                 for anchor in root.iter():
                     if not anchor.tag.endswith("twoCellAnchor") and not anchor.tag.endswith("oneCellAnchor"):
                         continue
@@ -205,8 +205,8 @@ def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
                         continue
                     embed = blip.get(f"{{{REL_NS}}}embed")
                     if embed:
-                        row_to_rid[row_num] = embed
-                drawing_rows[name] = row_to_rid
+                        row_to_rids.setdefault(row_num, []).append(embed)
+                drawing_rows[name] = row_to_rids
     except Exception as e:
         logger.warning("Could not parse drawings: %s", e)
     return drawing_rows
@@ -293,10 +293,12 @@ def _resolve_sheet_file(xlsx_path: Path, sheet_name: str) -> Optional[str]:
     return None
 
 
-def extract_images(xlsx_path: Path, images_dir: Path) -> Dict[int, str]:
+def extract_images(xlsx_path: Path, images_dir: Path) -> Dict[int, List[str]]:
     """
-    Extract images embedded in the main sheet and map them to row numbers (1-indexed, matching Excel row numbers).
-    Saves to images_dir as row_<N>.<ext> and returns {excel_row: filename}.
+    Extract images embedded in the main sheet and map them to row numbers (1-indexed).
+    Saves to images_dir as row_<N>.<ext> for the first image and row_<N>_<i>.<ext>
+    (i = 2, 3, …) for additional images on the same row.
+    Returns {excel_row: [filename, ...]} preserving document order.
     """
     images_dir.mkdir(parents=True, exist_ok=True)
     for old in images_dir.glob("row_*.*"):
@@ -315,27 +317,31 @@ def extract_images(xlsx_path: Path, images_dir: Path) -> Dict[int, str]:
     drawing_rows = _parse_drawing_row_map(xlsx_path).get(drawing_file, {})
     drawing_rels = _parse_drawing_rels(xlsx_path).get(drawing_file, {})
 
-    row_to_filename: Dict[int, str] = {}
+    row_to_filenames: Dict[int, List[str]] = {}
+    total = 0
     with zipfile.ZipFile(xlsx_path) as z:
-        for row_num, rid in drawing_rows.items():
-            media_rel = drawing_rels.get(rid)
-            if not media_rel:
-                continue
-            media_path = media_rel if media_rel.startswith("xl/") else f"xl/{media_rel}"
-            try:
-                data = z.read(media_path)
-            except KeyError:
-                continue
-            ext = os.path.splitext(media_path)[1].lower() or ".png"
+        for row_num, rids in drawing_rows.items():
             excel_row = row_num + 1
-            filename = f"row_{excel_row}{ext}"
-            out_path = images_dir / filename
-            with open(out_path, "wb") as f:
-                f.write(data)
-            row_to_filename[excel_row] = filename
+            for idx, rid in enumerate(rids):
+                media_rel = drawing_rels.get(rid)
+                if not media_rel:
+                    continue
+                media_path = media_rel if media_rel.startswith("xl/") else f"xl/{media_rel}"
+                try:
+                    data = z.read(media_path)
+                except KeyError:
+                    continue
+                ext = os.path.splitext(media_path)[1].lower() or ".png"
+                suffix = "" if idx == 0 else f"_{idx + 1}"
+                filename = f"row_{excel_row}{suffix}{ext}"
+                out_path = images_dir / filename
+                with open(out_path, "wb") as f:
+                    f.write(data)
+                row_to_filenames.setdefault(excel_row, []).append(filename)
+                total += 1
 
-    logger.info("Extracted %d images to %s", len(row_to_filename), images_dir)
-    return row_to_filename
+    logger.info("Extracted %d images across %d rows to %s", total, len(row_to_filenames), images_dir)
+    return row_to_filenames
 
 
 def load_synonym_sheets(xlsx_path: Path) -> List[List[str]]:
@@ -359,7 +365,7 @@ def load_synonym_sheets(xlsx_path: Path) -> List[List[str]]:
     return groups
 
 
-def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, Any]]:
+def build_entries(xlsx_path: Path, image_map: Dict[int, List[str]]) -> List[Dict[str, Any]]:
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if MAIN_SHEET not in wb.sheetnames:
         raise RuntimeError(f"Sheet '{MAIN_SHEET}' not found in {xlsx_path}")
@@ -418,9 +424,10 @@ def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, 
         if filmpje and (filmpje.startswith("http") or "youtube" in filmpje.lower() or "youtu.be" in filmpje.lower()):
             entry["video_url"] = filmpje
 
-        if excel_row in image_map:
-            rel = f"/faq_images/{image_map[excel_row]}"
-            entry["image_path"] = rel
+        if excel_row in image_map and image_map[excel_row]:
+            rels = [f"/faq_images/{name}" for name in image_map[excel_row]]
+            entry["image_paths"] = rels
+            entry["image_path"] = rels[0]
 
         de_q = _cell(row, "de_frage")
         de_a = _cell(row, "de_antwort")
@@ -621,7 +628,7 @@ def reload_from_excel(
 
     return {
         "entries": len(entries),
-        "images": len(image_map),
+        "images": sum(len(v) for v in image_map.values()),
         "synonym_groups": len(syn_groups),
         "polished": polished_count,
     }
