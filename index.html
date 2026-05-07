@@ -515,87 +515,6 @@
             backdrop-filter: blur(2px);
         }
         .video-thumb-link:hover .faq-image { opacity: 0.9; }
-
-        /* ── Image carrousel ───────────────────────────────── */
-        .faq-carousel {
-            position: relative;
-            width: 100%;
-            max-width: 360px;
-            margin-top: 6px;
-        }
-        .faq-carousel-track {
-            position: relative;
-            border-radius: 14px;
-            overflow: hidden;
-            background: var(--foam);
-            border: 1px solid rgba(14,122,196,0.12);
-            box-shadow: var(--shadow-md);
-        }
-        .faq-carousel-slide {
-            display: none;
-        }
-        .faq-carousel-slide.active { display: block; }
-        .faq-carousel-slide img {
-            display: block;
-            width: 100%;
-            max-height: 260px;
-            object-fit: contain;
-            background: var(--foam);
-        }
-        .faq-carousel-btn {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 36px;
-            height: 36px;
-            border: none;
-            border-radius: 50%;
-            background: rgba(255,255,255,0.92);
-            color: #0c2438;
-            font-size: 18px;
-            font-weight: 700;
-            cursor: pointer;
-            box-shadow: 0 4px 12px rgba(12,36,56,0.18);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.15s, transform 0.15s;
-            z-index: 2;
-        }
-        .faq-carousel-btn:hover { background: #fff; transform: translateY(-50%) scale(1.05); }
-        .faq-carousel-btn.prev { left: 8px; }
-        .faq-carousel-btn.next { right: 8px; }
-        .faq-carousel-counter {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            background: rgba(12,36,56,0.65);
-            color: #fff;
-            font-size: 11px;
-            font-weight: 600;
-            padding: 3px 9px;
-            border-radius: 999px;
-            z-index: 2;
-            backdrop-filter: blur(4px);
-        }
-        .faq-carousel-dots {
-            display: flex;
-            justify-content: center;
-            gap: 6px;
-            margin-top: 8px;
-        }
-        .faq-carousel-dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: rgba(14,122,196,0.25);
-            cursor: pointer;
-            transition: background 0.15s, transform 0.15s;
-        }
-        .faq-carousel-dot.active {
-            background: var(--ocean-500, #0e7ac4);
-            transform: scale(1.2);
-        }
         .video-link {
             display: inline-block;
             padding: 9px 14px;
@@ -1105,64 +1024,6 @@
         chatMessages.appendChild(row);
     }
 
-    let _carouselSeq = 0;
-    function addImageGallery(urls) {
-        const list = (urls || []).filter(u => typeof u === 'string' && u.trim());
-        if (list.length === 0) return;
-        if (list.length === 1) { addImage(list[0]); return; }
-
-        const id = 'car-' + (++_carouselSeq);
-        const row = document.createElement('div');
-        row.className = 'message-row bot';
-        const slides = list.map((u, i) => `
-            <div class="faq-carousel-slide${i === 0 ? ' active' : ''}" data-idx="${i}">
-                <a href="${escAttr(u)}" target="_blank" rel="noopener">
-                    <img src="${escAttr(u)}" alt="Illustration ${i + 1}" loading="lazy">
-                </a>
-            </div>`).join('');
-        const dots = list.map((_, i) => `
-            <span class="faq-carousel-dot${i === 0 ? ' active' : ''}" data-idx="${i}"></span>`).join('');
-        row.innerHTML = `
-            <div class="bot-avatar">📷</div>
-            <div>
-                <div class="faq-carousel" id="${id}">
-                    <div class="faq-carousel-track">
-                        <span class="faq-carousel-counter"><span class="cur">1</span>/${list.length}</span>
-                        <button type="button" class="faq-carousel-btn prev" aria-label="Previous">‹</button>
-                        ${slides}
-                        <button type="button" class="faq-carousel-btn next" aria-label="Next">›</button>
-                    </div>
-                    <div class="faq-carousel-dots">${dots}</div>
-                </div>
-            </div>`;
-        chatMessages.appendChild(row);
-
-        const root = document.getElementById(id);
-        const slidesEls = root.querySelectorAll('.faq-carousel-slide');
-        const dotsEls = root.querySelectorAll('.faq-carousel-dot');
-        const counter = root.querySelector('.faq-carousel-counter .cur');
-        let cur = 0;
-        function go(i) {
-            cur = (i + slidesEls.length) % slidesEls.length;
-            slidesEls.forEach((el, k) => el.classList.toggle('active', k === cur));
-            dotsEls.forEach((el, k) => el.classList.toggle('active', k === cur));
-            if (counter) counter.textContent = String(cur + 1);
-        }
-        root.querySelector('.faq-carousel-btn.prev').addEventListener('click', () => go(cur - 1));
-        root.querySelector('.faq-carousel-btn.next').addEventListener('click', () => go(cur + 1));
-        dotsEls.forEach(d => d.addEventListener('click', () => go(parseInt(d.dataset.idx, 10) || 0)));
-
-        let touchX = null;
-        const track = root.querySelector('.faq-carousel-track');
-        track.addEventListener('touchstart', e => { touchX = e.touches[0].clientX; }, { passive: true });
-        track.addEventListener('touchend', e => {
-            if (touchX === null) return;
-            const dx = e.changedTouches[0].clientX - touchX;
-            if (Math.abs(dx) > 40) go(cur + (dx < 0 ? 1 : -1));
-            touchX = null;
-        }, { passive: true });
-    }
-
     function addVideo(url) {
         if (!url) return;
         const videoId = extractYouTubeId(url);
@@ -1256,11 +1117,7 @@
 
             addMessage(answer, 'bot');
 
-            if (Array.isArray(data.image_urls) && data.image_urls.length > 0) {
-                addImageGallery(data.image_urls);
-            } else if (data.image_url) {
-                addImage(data.image_url);
-            }
+            if (data.image_url) addImage(data.image_url);
             if (data.video_url) addVideo(data.video_url);
 
             // Inline choice buttons (e.g. "Gen 1 / Gen 2 / Gen 3")
