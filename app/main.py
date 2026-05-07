@@ -3346,3 +3346,180 @@ async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
 
     count, _ = _reload_faq()
     return {"ok": True, "faq_loaded": count, "image": image_rel or None}
+
+
+# ---------------------------------------------------------------------
+# Admin: Lexicon (untranslatable / brand-protected terms)
+# ---------------------------------------------------------------------
+@app.get("/admin/lexicon")
+def get_lexicon(_auth: bool = Depends(require_admin)):
+    from .lexicon import load_lexicon
+    return {"ok": True, "terms": load_lexicon()}
+
+
+class LexiconPayload(BaseModel):
+    terms: List[Dict[str, str]] = []
+
+
+@app.post("/admin/lexicon")
+def post_lexicon(payload: LexiconPayload, _auth: bool = Depends(require_admin)):
+    from .lexicon import save_lexicon
+    saved = save_lexicon(payload.terms)
+    return {"ok": True, "count": len(saved), "terms": saved}
+
+
+# ---------------------------------------------------------------------
+# Admin: bulk-save FAQ table (re-translate changed rows + re-index)
+# ---------------------------------------------------------------------
+def _translate_nl_with_lexicon(question_nl: str, answer_nl: str) -> Dict[str, Dict[str, str]]:
+    """Translate NL question + answer to EN/FR/DE using Sonnet 4.6 + lexicon.
+
+    Returns: {"en": {"q": ..., "a": ...}, "fr": {...}, "de": {...}}
+    Empty dicts on failure (caller decides fallback).
+    """
+    from .rag import anthropic_client, _EXPERT_MODEL
+    from .lexicon import lexicon_prompt_block
+
+    if anthropic_client is None or not (question_nl or answer_nl):
+        return {"en": {}, "fr": {}, "de": {}}
+
+    lex_block = lexicon_prompt_block()
+    sys_prompt = (
+        "You translate Dutch FAQ entries (pool / spa / Wifipool domain) into English, French and German. "
+        "Translate accurately and naturally. Preserve formatting (line breaks, lists). "
+        "Reply with STRICT JSON only — no prose, no markdown fences. Schema: "
+        '{"en":{"q":"...","a":"..."},"fr":{"q":"...","a":"..."},"de":{"q":"...","a":"..."}}'
+    )
+    if lex_block:
+        sys_prompt += "\n\n" + lex_block
+
+    user_msg = (
+        "Translate this Dutch FAQ entry. Question and answer must each be translated.\n\n"
+        f"NL question: {question_nl}\n\nNL answer: {answer_nl}"
+    )
+
+    try:
+        resp = anthropic_client.messages.create(
+            model=_EXPERT_MODEL,
+            max_tokens=2000,
+            system=sys_prompt,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        text = "".join(getattr(b, "text", "") for b in resp.content) if resp.content else ""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        data = json.loads(text)
+        out = {}
+        for lang in ("en", "fr", "de"):
+            block = data.get(lang) or {}
+            out[lang] = {
+                "q": str(block.get("q") or "").strip(),
+                "a": str(block.get("a") or "").strip(),
+            }
+        return out
+    except Exception:
+        logger.exception("Translation failed")
+        return {"en": {}, "fr": {}, "de": {}}
+
+
+class FaqBulkRow(BaseModel):
+    id: Optional[str] = None
+    excel_row: Optional[int] = None
+    category: str = ""
+    question: str = ""               # NL question
+    answer: str = ""                 # NL answer
+    video_url: Optional[str] = None
+    image_paths: List[str] = []
+    alt_questions: List[str] = []
+    tags: List[str] = []
+    # Optional manual overrides — if set, skip auto-translate for that language
+    en_question: Optional[str] = None
+    en_answer: Optional[str] = None
+    fr_question: Optional[str] = None
+    fr_answer: Optional[str] = None
+    de_question: Optional[str] = None
+    de_answer: Optional[str] = None
+    # Marker so the client can request translation for new/edited rows only
+    needs_translation: bool = False
+
+
+class FaqBulkPayload(BaseModel):
+    rows: List[FaqBulkRow]
+
+
+@app.post("/admin/faq/bulk-save")
+def bulk_save_faq(payload: FaqBulkPayload, _auth: bool = Depends(require_admin)):
+    """Replace the JSONL with the provided rows. Re-translate rows flagged
+    needs_translation (new or NL-edited) using Sonnet 4.6 + lexicon. Then re-index.
+    """
+    rows = payload.rows or []
+    translated_count = 0
+    out_lines: List[str] = []
+    for row in rows:
+        nl_q = (row.question or "").strip()
+        nl_a = (row.answer or "").strip()
+        if not nl_q or not nl_a:
+            continue
+
+        translations: Dict[str, Dict[str, str]] = {
+            "en": {"q": (row.en_question or "").strip(), "a": (row.en_answer or "").strip()},
+            "fr": {"q": (row.fr_question or "").strip(), "a": (row.fr_answer or "").strip()},
+            "de": {"q": (row.de_question or "").strip(), "a": (row.de_answer or "").strip()},
+        }
+        any_translation_missing = any(
+            not translations[lang]["q"] or not translations[lang]["a"]
+            for lang in ("en", "fr", "de")
+        )
+        if row.needs_translation or any_translation_missing:
+            generated = _translate_nl_with_lexicon(nl_q, nl_a)
+            for lang in ("en", "fr", "de"):
+                if not translations[lang]["q"]:
+                    translations[lang]["q"] = generated[lang].get("q", "")
+                if not translations[lang]["a"]:
+                    translations[lang]["a"] = generated[lang].get("a", "")
+            translated_count += 1
+
+        entry: Dict[str, Any] = {
+            "Categorie": (row.category or "").strip(),
+            "Vraag": nl_q,
+            "Antwoord": nl_a,
+            "alt_questions": [str(s).strip() for s in (row.alt_questions or []) if str(s).strip()],
+            "tags": [str(s).strip() for s in (row.tags or []) if str(s).strip()],
+        }
+        if row.excel_row:
+            entry["excel_row"] = int(row.excel_row)
+        if (row.video_url or "").strip():
+            entry["video_url"] = (row.video_url or "").strip()
+        clean_imgs = [p for p in (row.image_paths or []) if isinstance(p, str) and p.strip()]
+        if clean_imgs:
+            entry["image_paths"] = clean_imgs
+            entry["image_path"] = clean_imgs[0]
+        if row.id:
+            entry["id"] = row.id
+        for lang_code, q_key, a_key in (
+            ("en", "ENQuestion", "ENAnswer"),
+            ("fr", "FRQuestion", "FRReponse"),
+            ("de", "DEFrage", "DEAntwort"),
+        ):
+            tq = translations[lang_code]["q"]
+            ta = translations[lang_code]["a"]
+            if tq:
+                entry[q_key] = tq
+            if ta:
+                entry[a_key] = ta
+        out_lines.append(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    os.makedirs(os.path.dirname(_FAQ_FALLBACK_JSONL), exist_ok=True)
+    with open(_FAQ_FALLBACK_JSONL, "w", encoding="utf-8") as f:
+        f.writelines(out_lines)
+
+    count, _ = _reload_faq()
+    return {
+        "ok": True,
+        "saved": len(out_lines),
+        "translated": translated_count,
+        "faq_loaded": count,
+    }
