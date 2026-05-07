@@ -3351,7 +3351,7 @@ async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
 # ---------------------------------------------------------------------
 # Admin: full FAQ dump (all fields incl. translations) for the table editor
 # ---------------------------------------------------------------------
-@app.get("/admin/faq/full")
+@app.get("/admin/faq-table")
 def admin_faq_full(_auth: bool = Depends(require_admin)):
     """Return the raw JSONL contents (all fields, all languages) for the
     Excel-style table editor. Each entry keeps its original keys."""
