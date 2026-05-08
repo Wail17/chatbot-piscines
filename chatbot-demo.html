@@ -318,6 +318,30 @@
     <script>
         const API_URL = 'https://web-production-5dde.up.railway.app/chat';
 
+        // Resolve the conversation language so the backend doesn't have to
+        // guess on short follow-ups ("Gen 2", "ja", "merci"). Priority:
+        //   1. ?lang= URL parameter (e.g. ?lang=nl)
+        //   2. localStorage 'wifipool_lang' (set by the main chat UI)
+        //   3. The browser's first language code (navigator.language)
+        //   4. 'en' as a safe default
+        function resolveLanguage() {
+            try {
+                const url = new URLSearchParams(window.location.search);
+                const fromUrl = (url.get('lang') || '').slice(0, 2).toLowerCase();
+                if (['nl', 'fr', 'en', 'de'].includes(fromUrl)) return fromUrl;
+            } catch (e) {}
+            try {
+                const stored = (localStorage.getItem('wifipool_lang') || '').slice(0, 2).toLowerCase();
+                if (['nl', 'fr', 'en', 'de'].includes(stored)) return stored;
+            } catch (e) {}
+            try {
+                const nav = (navigator.language || 'en').slice(0, 2).toLowerCase();
+                if (['nl', 'fr', 'en', 'de'].includes(nav)) return nav;
+            } catch (e) {}
+            return 'en';
+        }
+        const CONVO_LANG = resolveLanguage();
+
         const questionInput = document.getElementById('questionInput');
         const sendBtn = document.getElementById('sendBtn');
         const loading = document.querySelector('.loading');
@@ -344,7 +368,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ query: question })
+                    body: JSON.stringify({ query: question, language: CONVO_LANG })
                 });
 
                 if (!response.ok) {
