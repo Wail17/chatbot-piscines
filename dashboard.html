@@ -556,6 +556,48 @@
       margin-left: auto;
     }
 
+    /* ── Category tabs ─────────────────────────────────────── */
+    .cat-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      margin-bottom: 16px;
+    }
+    .cat-tab {
+      padding: 7px 14px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      transition: all var(--transition);
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cat-tab:hover { background: var(--bg-page); color: var(--text-primary); }
+    .cat-tab.active {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 2px 6px rgba(108,99,255,0.25);
+    }
+    .cat-tab .cat-tab-count {
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.06);
+      color: inherit;
+    }
+    .cat-tab.active .cat-tab-count { background: rgba(255,255,255,0.22); }
+
     /* ── Buttons ───────────────────────────────────────────── */
     .btn {
       display: inline-flex;
@@ -1517,6 +1559,10 @@
         <span class="nav-icon">📊</span>
         <span>Overview</span>
       </div>
+      <div class="nav-item" onclick="showSection('faq')" id="nav-faq">
+        <span class="nav-icon">📚</span>
+        <span>FAQ per categorie</span>
+      </div>
       <div class="nav-item" onclick="showSection('gaps')" id="nav-gaps">
         <span class="nav-icon">❓</span>
         <span>Unanswered questions</span>
@@ -1646,6 +1692,35 @@
         </div>
       </div>
 
+      <!-- ─────────────────────────────────────────────────
+           SECTION: FAQ per categorie
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-faq">
+        <div class="section-header">
+          <h2>FAQ per categorie</h2>
+          <p>Bekijk en bewerk alle vragen, gegroepeerd per categorie.</p>
+        </div>
+
+        <div class="cat-tabs" id="cat-tabs">
+          <div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
+        </div>
+
+        <div class="faq-toolbar">
+          <div class="faq-search">
+            <span class="faq-search-icon">🔎</span>
+            <input id="faq-search-input" type="text" placeholder="Search question, answer, tag…" oninput="onSearchInput()" />
+          </div>
+          <button class="btn btn-primary" onclick="openCreateModal()"><span>➕</span> New question</button>
+          <button class="btn btn-ghost" onclick="downloadExcelByCategory()" title="Download an Excel with one sheet per category"><span>📥</span> Excel per categorie</button>
+          <span class="faq-count" id="faq-count-label">—</span>
+        </div>
+
+        <div class="table-wrap" id="faq-table-wrap">
+          <div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
+        </div>
+        <div id="faq-pagination"></div>
+      </div>
+
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /layout -->
@@ -1735,17 +1810,22 @@
     </div>
 
     <div class="qa-field">
-      <label class="qa-label" for="qa-video">YouTube link <span class="opt">(optional)</span></label>
-      <input class="qa-input" type="url" id="qa-video" placeholder="https://www.youtube.com/watch?v=…" />
+      <label class="qa-label" for="qa-video">YouTube links <span class="opt">(optional — one URL per line)</span></label>
+      <textarea class="qa-textarea" id="qa-video" placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…" style="min-height:70px;"></textarea>
     </div>
 
     <div class="qa-field">
-      <label class="qa-label" for="qa-image">Image <span class="opt">(optional — PNG / JPG)</span></label>
+      <label class="qa-label" for="qa-products">Webshop / product links <span class="opt">(optional — one per line, format: « Title | URL » or just URL)</span></label>
+      <textarea class="qa-textarea" id="qa-products" placeholder="Doseerpomp Wifipool | https://beniferro.eu/product/doseerpomp&#10;https://beniferro.eu/product/zoutelektrolyse" style="min-height:70px;"></textarea>
+    </div>
+
+    <div class="qa-field">
+      <label class="qa-label" for="qa-image">Images <span class="opt">(optional — PNG / JPG, multiple allowed)</span></label>
       <label class="qa-file-box" for="qa-image">
         <span>📎</span>
-        <span id="qa-image-label">Click to choose an image…</span>
+        <span id="qa-image-label">Click to choose one or more images…</span>
       </label>
-      <input type="file" id="qa-image" accept="image/*" style="display:none;" onchange="onImagePicked(this)" />
+      <input type="file" id="qa-image" accept="image/*" multiple style="display:none;" onchange="onImagePicked(this)" />
     </div>
 
     <div class="qa-actions">
@@ -1771,6 +1851,7 @@
 let allFaqs = [], filteredFaqs = [], currentPage = 1, PAGE_SIZE = 20;
 let editingId = null, charts = {}, currentPeriod = 7;
 let currentSection = 'overview';
+let activeCategory = '__all__';
 
 /* ─── Auth ────────────────────────────────────────────────── */
 const TOKEN_KEY = 'wifipool_admin_token';
@@ -1862,6 +1943,7 @@ const API = {
 /* ─── Navigation ──────────────────────────────────────────── */
 const SECTION_TITLES = {
   overview: 'Overzicht',
+  faq: 'FAQ per categorie 📚',
   gaps: 'Unanswered questions ❓'
 };
 
@@ -1876,6 +1958,7 @@ function showSection(name) {
   currentSection = name;
 
   if (name === 'overview') loadOverview();
+  if (name === 'faq') loadFaqManager();
   if (name === 'gaps') loadGaps();
 }
 
@@ -1909,8 +1992,17 @@ function closeQuickAdd() {
   document.getElementById('qa-image-label').textContent = 'Click to choose an image…';
 }
 function onImagePicked(input) {
-  const f = input.files && input.files[0];
-  document.getElementById('qa-image-label').textContent = f ? f.name : 'Click to choose an image…';
+  const files = input.files;
+  const label = document.getElementById('qa-image-label');
+  if (!files || files.length === 0) {
+    label.textContent = 'Click to choose one or more images…';
+    return;
+  }
+  if (files.length === 1) {
+    label.textContent = files[0].name;
+  } else {
+    label.textContent = `${files.length} images selected`;
+  }
 }
 
 async function submitQuickAdd(e) {
@@ -1926,8 +2018,19 @@ async function submitQuickAdd(e) {
   const fd = new FormData();
   fd.append('question', question);
   fd.append('answer', answer);
-  if (video) fd.append('video_url', video);
-  if (imageInput.files && imageInput.files[0]) fd.append('image', imageInput.files[0]);
+  const videoLines = video.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean);
+  if (videoLines.length > 0) {
+    fd.append('video_url', videoLines[0]);
+    if (videoLines.length > 1) videoLines.forEach(v => fd.append('video_urls', v));
+  }
+  const productsRaw = (document.getElementById('qa-products')?.value || '').trim();
+  if (productsRaw) {
+    productsRaw.split(/[\r\n]+/).map(s => s.trim()).filter(Boolean).forEach(line => {
+      fd.append('product_links', line);
+    });
+  }
+  const picked = imageInput.files ? Array.from(imageInput.files) : [];
+  picked.forEach(f => fd.append('images', f));
 
   btn.disabled = true;
   const originalHTML = btn.innerHTML;
@@ -1966,6 +2069,23 @@ async function downloadExcel() {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'AI 2.0.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (ex) {
+    showToast('Download failed: ' + ex.message, 'error');
+  }
+}
+
+async function downloadExcelByCategory() {
+  showToast('Building Excel per categorie…', 'info');
+  try {
+    const r = await fetch('/admin/excel/download-by-category', { headers: _authHeaders() });
+    if (r.status === 401) { clearToken(); showLogin(); return; }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'FAQ per categorie.xlsx';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   } catch (ex) {
@@ -2156,14 +2276,47 @@ async function loadFaqManager() {
   document.getElementById('faq-table-wrap').innerHTML = '<div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>';
   try {
     const data = await API.get('/admin/faq');
-    allFaqs = Array.isArray(data) ? data : (data.faqs || data.items || []);
+    allFaqs = Array.isArray(data) ? data
+            : (data.faq || data.faqs || data.items || []);
+    renderCategoryTabs();
     filterFaqs();
   } catch (e) {
     console.warn('FAQ load error:', e);
     showToast('Could not load FAQ', 'error');
     allFaqs = [];
+    renderCategoryTabs();
     filterFaqs();
   }
+}
+
+function getFaqCategory(f) {
+  return (f.category || f.categorie || f.Categorie || '').trim() || 'Andere';
+}
+
+function renderCategoryTabs() {
+  const wrap = document.getElementById('cat-tabs');
+  if (!wrap) return;
+  const counts = new Map();
+  for (const f of allFaqs) {
+    const c = getFaqCategory(f);
+    counts.set(c, (counts.get(c) || 0) + 1);
+  }
+  const cats = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const total = allFaqs.length;
+  const validKeys = new Set(['__all__', ...cats.map(([c]) => c)]);
+  if (!validKeys.has(activeCategory)) activeCategory = '__all__';
+  const allBtn = `<button class="cat-tab ${activeCategory === '__all__' ? 'active' : ''}" onclick="setActiveCategoryTab('__all__')">All<span class="cat-tab-count">${total}</span></button>`;
+  const tabs = cats.map(([cat, n]) =>
+    `<button class="cat-tab ${activeCategory === cat ? 'active' : ''}" onclick="setActiveCategoryTab(${JSON.stringify(cat).replace(/"/g, '&quot;')})">${escHtml(cat)}<span class="cat-tab-count">${n}</span></button>`
+  ).join('');
+  wrap.innerHTML = allBtn + tabs;
+}
+
+function setActiveCategoryTab(cat) {
+  activeCategory = cat;
+  currentPage = 1;
+  renderCategoryTabs();
+  filterFaqs();
 }
 
 function onSearchInput() {
@@ -2173,10 +2326,14 @@ function onSearchInput() {
 
 function filterFaqs() {
   const q = (document.getElementById('faq-search-input').value || '').toLowerCase().trim();
+  let base = allFaqs;
+  if (activeCategory && activeCategory !== '__all__') {
+    base = base.filter(f => getFaqCategory(f) === activeCategory);
+  }
   if (!q) {
-    filteredFaqs = [...allFaqs];
+    filteredFaqs = [...base];
   } else {
-    filteredFaqs = allFaqs.filter(f =>
+    filteredFaqs = base.filter(f =>
       (f.question || '').toLowerCase().includes(q) ||
       (f.answer || f.response || '').toLowerCase().includes(q) ||
       (f.category || f.categorie || '').toLowerCase().includes(q) ||

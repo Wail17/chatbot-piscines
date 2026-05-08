@@ -283,6 +283,22 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                     "source": path,
                 }
 
+                video_urls_raw = (
+                    obj.get("video_urls")
+                    or obj.get("videos")
+                    or obj.get("Filmpjes")
+                )
+                video_urls_list: List[str] = []
+                if isinstance(video_urls_raw, list):
+                    for v in video_urls_raw:
+                        s = _coerce_str(v)
+                        if s and s not in video_urls_list:
+                            video_urls_list.append(s)
+                elif isinstance(video_urls_raw, str):
+                    s = video_urls_raw.strip()
+                    if s:
+                        video_urls_list.append(s)
+
                 video = (
                     obj.get("video_url")
                     or obj.get("video")
@@ -294,8 +310,29 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                 if not video and media:
                     video = media.get("video") or media.get("url")
                 video_str = _coerce_str(video)
-                if video_str:
-                    row["video_url"] = video_str
+                if video_str and video_str not in video_urls_list:
+                    video_urls_list.insert(0, video_str)
+
+                if video_urls_list:
+                    row["video_url"] = video_urls_list[0]
+                    row["video_urls"] = video_urls_list
+
+                image_paths_raw = (
+                    obj.get("image_paths")
+                    or obj.get("image_urls")
+                    or obj.get("images")
+                    or obj.get("Fotos")
+                )
+                image_paths_list: List[str] = []
+                if isinstance(image_paths_raw, list):
+                    for p in image_paths_raw:
+                        s = _coerce_str(p)
+                        if s and s not in image_paths_list:
+                            image_paths_list.append(s)
+                elif isinstance(image_paths_raw, str):
+                    s = image_paths_raw.strip()
+                    if s:
+                        image_paths_list.append(s)
 
                 image_path = _coerce_str(
                     obj.get("image_path")
@@ -303,8 +340,33 @@ def _load_faq_from_jsonl(path: str) -> List[dict]:
                     or obj.get("image")
                     or obj.get("Foto")
                 )
-                if image_path:
-                    row["image_path"] = image_path
+                if image_path and image_path not in image_paths_list:
+                    image_paths_list.insert(0, image_path)
+
+                if image_paths_list:
+                    row["image_path"] = image_paths_list[0]
+                    row["image_paths"] = image_paths_list
+
+                product_links_raw = (
+                    obj.get("product_links")
+                    or obj.get("productLinks")
+                    or obj.get("Producten")
+                    or obj.get("verkooplinks")
+                )
+                product_links: List[Dict[str, str]] = []
+                if isinstance(product_links_raw, list):
+                    for it in product_links_raw:
+                        if isinstance(it, dict):
+                            url = (it.get("url") or "").strip()
+                            title = (it.get("title") or "").strip()
+                            if url:
+                                product_links.append({"title": title or url, "url": url})
+                        elif isinstance(it, str):
+                            url = it.strip()
+                            if url:
+                                product_links.append({"title": url, "url": url})
+                if product_links:
+                    row["product_links"] = product_links
 
                 alt_raw = obj.get("alt_questions") or obj.get("alternatieve_vragen") or []
                 if isinstance(alt_raw, list):
@@ -922,6 +984,13 @@ def _row_semantic_text(row: dict) -> str:
 
 _LANG_BY_REF: Dict[str, str] = {}
 
+# Per-client sticky language so multi-turn conversations don't drift to the
+# wrong language on short follow-ups ("Gen 2", "ja", "merci").
+# Keyed by client_id with a TTL so old sessions don't keep their language
+# forever.
+_LANG_BY_CLIENT: Dict[str, tuple] = {}  # client_id -> (lang_code, ts)
+_LANG_CLIENT_TTL = 1800.0  # 30 min — longer than a typical support chat
+
 
 def _ref_key(ref: str | None) -> str:
     return _normalize(ref or "")
@@ -940,6 +1009,33 @@ def _language_for_ref(ref: str | None) -> str | None:
     if not key:
         return None
     return _LANG_BY_REF.get(key)
+
+
+def _remember_client_lang(client_id: str | None, lang: str | None) -> None:
+    """Record the conversation language for a client_id.
+
+    Only stores values from {nl, fr, en, de} — never persists fallback noise.
+    """
+    if not client_id:
+        return
+    lang = (lang or "").strip().lower()
+    if lang not in {"nl", "fr", "en", "de"}:
+        return
+    _LANG_BY_CLIENT[client_id] = (lang, time.time())
+
+
+def _get_client_lang(client_id: str | None) -> str | None:
+    """Return the sticky language for this client, or None if expired/missing."""
+    if not client_id:
+        return None
+    entry = _LANG_BY_CLIENT.get(client_id)
+    if not entry:
+        return None
+    lang, ts = entry
+    if (time.time() - ts) > _LANG_CLIENT_TTL:
+        _LANG_BY_CLIENT.pop(client_id, None)
+        return None
+    return lang
 
 
 def _ensure_language(text: str, lang_code: str | None) -> str:
@@ -1307,15 +1403,55 @@ def _get_answer_in_language(row: dict, lang_code: str) -> Optional[str]:
 
 
 def _enrich_response_with_media(response: Dict[str, Any], row: Optional[dict]) -> Dict[str, Any]:
-    """Add image_url and video_url fields (when available) to a response dict."""
+    """Add image_url(s) and video_url fields (when available) to a response dict."""
     if not isinstance(row, dict) or not isinstance(response, dict):
         return response
+
+    paths_raw = row.get("image_paths")
+    image_paths: List[str] = []
+    if isinstance(paths_raw, list):
+        for p in paths_raw:
+            s = (p or "").strip() if isinstance(p, str) else ""
+            if s and s not in image_paths:
+                image_paths.append(s)
     image_path = (row.get("image_path") or "").strip()
-    if image_path and "image_url" not in response:
-        response["image_url"] = image_path
+    if image_path and image_path not in image_paths:
+        image_paths.insert(0, image_path)
+
+    if image_paths:
+        if "image_url" not in response:
+            response["image_url"] = image_paths[0]
+        if "image_urls" not in response and len(image_paths) > 1:
+            response["image_urls"] = image_paths
+
+    video_urls_raw = row.get("video_urls")
+    video_urls: List[str] = []
+    if isinstance(video_urls_raw, list):
+        for v in video_urls_raw:
+            s = (v or "").strip() if isinstance(v, str) else ""
+            if s and s not in video_urls:
+                video_urls.append(s)
     video_url = (row.get("video_url") or "").strip()
-    if video_url and "video_url" not in response:
-        response["video_url"] = video_url
+    if video_url and video_url not in video_urls:
+        video_urls.insert(0, video_url)
+
+    if video_urls:
+        if "video_url" not in response:
+            response["video_url"] = video_urls[0]
+        if "video_urls" not in response and len(video_urls) > 1:
+            response["video_urls"] = video_urls
+
+    products_raw = row.get("product_links")
+    if isinstance(products_raw, list) and products_raw and "product_links" not in response:
+        cleaned: List[Dict[str, str]] = []
+        for it in products_raw:
+            if isinstance(it, dict):
+                url = (it.get("url") or "").strip()
+                title = (it.get("title") or "").strip()
+                if url:
+                    cleaned.append({"title": title or url, "url": url})
+        if cleaned:
+            response["product_links"] = cleaned
     return response
 
 
@@ -2697,8 +2833,19 @@ def chat(req: ChatRequest, request: Request):
             pending_lang = (_PENDING_BY_CLIENT.get(client_id) or {}).get("language") if client_id else None
             if pending_lang:
                 lang_code = pending_lang
+        # Sticky per-client language: if we already locked a language for this
+        # client during the current session, keep it for short follow-ups
+        # ("Gen 2", "ja", "merci") that the detector cannot classify.
+        if not lang_code:
+            sticky = _get_client_lang(client_id)
+            if sticky:
+                lang_code = sticky
         if not lang_code:
             lang_code = "en"
+
+    # Persist the resolved language for this client so the next message in the
+    # same conversation reuses it instead of falling back blindly.
+    _remember_client_lang(client_id, lang_code)
 
     # ── Track this question in analytics ────────────────────────────────────
     if q:
@@ -3185,6 +3332,119 @@ def download_excel(_auth: bool = Depends(require_admin)):
     )
 
 
+@app.get("/admin/excel/download-by-category")
+def download_excel_by_category(_auth: bool = Depends(require_admin)):
+    """Generate an xlsx with one worksheet per FAQ category (text-only view).
+
+    Source: current FAQAI.jsonl (live state). For browsing/editing without
+    images. The master 'AI 2.0.xlsx' remains the source of truth for images.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    import io as _io
+    import re as _re
+
+    jsonl_path = os.path.join(_PROJECT_ROOT, "app", "data", "all", "faq", "FAQAI.jsonl")
+    if not os.path.exists(jsonl_path):
+        raise HTTPException(status_code=404, detail="FAQAI.jsonl not found")
+
+    # Group entries by category
+    by_cat: Dict[str, List[Dict[str, Any]]] = {}
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            cat = (e.get("Categorie") or e.get("category") or "").strip() or "Andere"
+            by_cat.setdefault(cat, []).append(e)
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    headers = [
+        "Vraag (NL)", "Antwoord (NL)",
+        "Alt vragen", "Tags",
+        "Filmpje", "Foto",
+        "Producten",
+        "EN Question", "EN Answer",
+        "FR Question", "FR Réponse",
+        "DE Frage", "DE Antwort",
+    ]
+    head_font = Font(bold=True, color="FFFFFF")
+    head_fill = PatternFill("solid", fgColor="6C63FF")
+    wrap = Alignment(wrap_text=True, vertical="top")
+
+    def _safe_sheet_name(name: str) -> str:
+        # Excel sheet names: max 31 chars, no : \ / ? * [ ]
+        cleaned = _re.sub(r"[:\\/?*\[\]]", " ", name).strip() or "Andere"
+        return cleaned[:31]
+
+    used_names: Dict[str, int] = {}
+    for cat in sorted(by_cat.keys(), key=str.lower):
+        base = _safe_sheet_name(cat)
+        name = base
+        i = 2
+        while name in wb.sheetnames:
+            name = f"{base[:28]} ({i})"
+            i += 1
+        used_names[cat] = name
+        ws = wb.create_sheet(title=name)
+
+        for idx, h in enumerate(headers, start=1):
+            c = ws.cell(row=1, column=idx, value=h)
+            c.font = head_font
+            c.fill = head_fill
+            c.alignment = wrap
+        ws.freeze_panes = "A2"
+
+        for r_idx, e in enumerate(by_cat[cat], start=2):
+            alt = e.get("alt_questions") or []
+            tags = e.get("tags") or []
+            videos = e.get("video_urls") or ([e["video_url"]] if e.get("video_url") else [])
+            images = e.get("image_paths") or ([e["image_path"]] if e.get("image_path") else [])
+            products = e.get("product_links") or []
+            products_txt = "\n".join(
+                f"{p.get('title','')} | {p.get('url','')}".strip(" |") if isinstance(p, dict) else str(p)
+                for p in products if p
+            )
+            row_vals = [
+                e.get("Vraag") or e.get("question") or "",
+                e.get("Antwoord") or e.get("answer") or "",
+                "\n".join(alt) if isinstance(alt, list) else str(alt),
+                ", ".join(tags) if isinstance(tags, list) else str(tags),
+                "\n".join(videos),
+                "\n".join(images),
+                products_txt,
+                e.get("ENQuestion") or "", e.get("ENAnswer") or "",
+                e.get("FRQuestion") or "", e.get("FRReponse") or "",
+                e.get("DEFrage") or "", e.get("DEAntwort") or "",
+            ]
+            for c_idx, val in enumerate(row_vals, start=1):
+                cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                cell.alignment = wrap
+
+        widths = [40, 60, 30, 24, 30, 28, 40, 40, 60, 40, 60, 40, 60]
+        for i, w in enumerate(widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+
+    if not wb.sheetnames:
+        wb.create_sheet(title="Leeg")
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from fastapi.responses import Response
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="FAQ per categorie.xlsx"'},
+    )
+
+
 @app.post("/admin/excel/upload")
 async def upload_excel(request: Request, _auth: bool = Depends(require_admin)):
     """Receive a replacement AI 2.0.xlsx (multipart form field 'file') and reload."""
@@ -3244,33 +3504,83 @@ async def upload_excel(request: Request, _auth: bool = Depends(require_admin)):
 async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
     """Quick-add a single Q&A (multipart/form-data).
 
-    Fields: question (required), answer (required),
-            video_url (optional), image (optional file upload).
+    Fields: question (required), answer (required), video_url (optional),
+            image / image2 / image3 / … or images (optional file uploads —
+            multiple images are supported and shown together in the answer).
+
     Appends to AI 2.0.xlsx (preserves truth source) and to JSONL, then reloads.
     """
     form = await request.form()
     question = (form.get("question") or "").strip()
     answer = (form.get("answer") or "").strip()
     video_url = (form.get("video_url") or "").strip()
-    image = form.get("image")
+
+    # Collect additional video URLs (multi)
+    video_urls_extra: List[str] = []
+    try:
+        for v in form.getlist("video_urls"):
+            s = (v or "").strip() if isinstance(v, str) else ""
+            if s and s not in video_urls_extra:
+                video_urls_extra.append(s)
+    except Exception:
+        pass
+    if video_url and video_url not in video_urls_extra:
+        video_urls_extra.insert(0, video_url)
+    if video_urls_extra and not video_url:
+        video_url = video_urls_extra[0]
+
+    # Product links: one per line via 'product_links' form field
+    product_links_in: List[Dict[str, str]] = []
+    try:
+        product_lines_raw = form.getlist("product_links")
+    except Exception:
+        product_lines_raw = []
+    try:
+        from .excel_loader import _parse_product_links as _ppl
+    except Exception:
+        _ppl = None
+    if _ppl is not None and product_lines_raw:
+        joined = "\n".join(s for s in product_lines_raw if isinstance(s, str))
+        product_links_in = _ppl(joined)
+
+    # Collect all uploaded images: 'images' (multi), 'image', 'image2', 'image3', …
+    image_uploads: List[Any] = []
+    try:
+        for v in form.getlist("images"):
+            if v is not None and getattr(v, "filename", ""):
+                image_uploads.append(v)
+    except Exception:
+        pass
+    for key in ("image", *(f"image{i}" for i in range(2, 11))):
+        v = form.get(key)
+        if v is not None and getattr(v, "filename", ""):
+            image_uploads.append(v)
 
     if not question or not answer:
         raise HTTPException(status_code=400, detail="Question et réponse obligatoires")
 
-    # Save image if provided
-    image_rel = ""
-    if image is not None and getattr(image, "filename", ""):
-        img_bytes = await image.read()
-        if img_bytes:
-            images_dir = os.path.join(_PROJECT_ROOT, "app", "data", "faq_images")
-            os.makedirs(images_dir, exist_ok=True)
-            ext = os.path.splitext(image.filename)[1].lower() or ".png"
+    # Save images if provided (URLs are relative to the static /faq_images mount)
+    image_rels: List[str] = []
+    if image_uploads:
+        images_dir = os.path.join(_PROJECT_ROOT, "app", "data", "faq_images")
+        os.makedirs(images_dir, exist_ok=True)
+        ts = int(time.time())
+        for idx, img in enumerate(image_uploads):
+            try:
+                img_bytes = await img.read()
+            except Exception:
+                continue
+            if not img_bytes:
+                continue
+            ext = os.path.splitext(img.filename)[1].lower() or ".png"
             if ext not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                 ext = ".png"
-            fname = f"manual_{int(time.time())}{ext}"
+            suffix = "" if idx == 0 else f"_{idx + 1}"
+            fname = f"manual_{ts}{suffix}{ext}"
             with open(os.path.join(images_dir, fname), "wb") as f:
                 f.write(img_bytes)
-            image_rel = f"app/data/faq_images/{fname}"
+            image_rels.append(f"/faq_images/{fname}")
+    image_rel = image_rels[0] if image_rels else ""
 
     # 1) Append to Excel (source of truth)
     try:
@@ -3291,7 +3601,9 @@ async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
         new_row = ws.max_row + 1
         if c_vraag: ws.cell(row=new_row, column=c_vraag, value=question)
         if c_antw:  ws.cell(row=new_row, column=c_antw,  value=answer)
-        if c_film and video_url: ws.cell(row=new_row, column=c_film, value=video_url)
+        if c_film and (video_urls_extra or video_url):
+            cell_value = "\n".join(video_urls_extra) if video_urls_extra else video_url
+            ws.cell(row=new_row, column=c_film, value=cell_value)
         if c_cat and not ws.cell(row=new_row, column=c_cat).value:
             ws.cell(row=new_row, column=c_cat, value="Algemeen")
         wb.save(_EXCEL_PATH)
@@ -3307,8 +3619,9 @@ async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
         logger.exception("Reload after quick-add failed")
         raise HTTPException(status_code=500, detail=f"Reload failed: {e}")
 
-    # 3) If we had a manually uploaded image, append image_path to that entry in JSONL
-    if image_rel:
+    # 3) Attach manually uploaded images, extra videos, and product links to the new JSONL entry
+    needs_patch = bool(image_rels) or len(video_urls_extra) > 1 or bool(product_links_in)
+    if needs_patch:
         try:
             lines = []
             with open(_FAQ_FALLBACK_JSONL, "r", encoding="utf-8") as f:
@@ -3316,12 +3629,25 @@ async def quick_add_faq(request: Request, _auth: bool = Depends(require_admin)):
                     lines.append(line)
             if lines:
                 last = json.loads(lines[-1])
-                last["image_path"] = image_rel
+                if image_rels:
+                    last["image_path"] = image_rels[0]
+                    if len(image_rels) > 1:
+                        last["image_paths"] = image_rels
+                if len(video_urls_extra) > 1:
+                    last["video_url"] = video_urls_extra[0]
+                    last["video_urls"] = video_urls_extra
+                if product_links_in:
+                    last["product_links"] = product_links_in
                 lines[-1] = json.dumps(last, ensure_ascii=False) + "\n"
                 with open(_FAQ_FALLBACK_JSONL, "w", encoding="utf-8") as f:
                     f.writelines(lines)
         except Exception:
-            logger.warning("Could not attach manual image to last entry", exc_info=True)
+            logger.warning("Could not attach manual media to last entry", exc_info=True)
 
     count, _ = _reload_faq()
-    return {"ok": True, "faq_loaded": count, "image": image_rel or None}
+    return {
+        "ok": True,
+        "faq_loaded": count,
+        "image": image_rel or None,
+        "images": image_rels or None,
+    }

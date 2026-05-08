@@ -494,6 +494,132 @@
             background: var(--foam);
             box-shadow: var(--shadow-md);
         }
+        .faq-image-single { display: block; }
+        .faq-image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .faq-image-grid .faq-image {
+            margin-top: 0;
+            max-height: 180px;
+            width: 100%;
+            object-fit: cover;
+        }
+        .faq-image-link { display: block; line-height: 0; }
+        .product-links {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .product-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, var(--ocean-500, #0E7AC4), var(--ocean-400, #3EA5D8));
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            box-shadow: 0 4px 14px rgba(14,122,196,0.25);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .product-link:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(14,122,196,0.35);
+        }
+        .product-link::before {
+            content: "🛒";
+            font-size: 14px;
+        }
+
+        /* ── Message actions (copy / translate) ───────────── */
+        .bot-col { display: flex; flex-direction: column; }
+        .msg-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            opacity: 0.7;
+            transition: opacity 0.18s ease;
+        }
+        .message-row.bot:hover .msg-actions { opacity: 1; }
+        .msg-action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 10px;
+            border: 1px solid rgba(14,122,196,0.18);
+            background: #fff;
+            color: var(--ocean-700, #0E5A90);
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-family: inherit;
+        }
+        .msg-action-btn:hover {
+            border-color: var(--ocean-500, #0E7AC4);
+            background: rgba(14,122,196,0.06);
+        }
+        .msg-action-btn:active { transform: translateY(1px); }
+        .msg-action-icon { font-size: 13px; line-height: 1; }
+        .msg-action-tr { position: relative; }
+        .msg-tr-pop {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            display: flex;
+            gap: 4px;
+            background: #fff;
+            border: 1px solid rgba(14,122,196,0.2);
+            border-radius: 12px;
+            padding: 4px;
+            box-shadow: 0 8px 24px rgba(11,31,58,0.14);
+            z-index: 10;
+        }
+        .msg-tr-pop[hidden] { display: none; }
+        .msg-tr-pop button {
+            border: none;
+            background: transparent;
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--ocean-700, #0E5A90);
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .msg-tr-pop button:hover {
+            background: rgba(14,122,196,0.1);
+            color: var(--ocean-500, #0E7AC4);
+        }
+        .msg-action-feedback {
+            font-size: 11.5px;
+            color: var(--ocean-500, #0E7AC4);
+            font-weight: 600;
+            opacity: 0;
+            transform: translateY(2px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+        .msg-action-feedback.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .faq-video-single { display: block; }
+        .faq-video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .faq-video-grid .video-thumb-link { display: block; }
+        .faq-video-grid .faq-image { margin-top: 0; max-height: 180px; width: 100%; object-fit: cover; }
         .video-thumb {
             position: relative;
             display: inline-block;
@@ -909,7 +1035,7 @@
         // Bot / error message
         row.innerHTML = `
             <div class="bot-avatar">🏊</div>
-            <div>
+            <div class="bot-col">
                 <div class="bubble ${type}"></div>
                 <div class="bubble-time">${t}</div>
             </div>`;
@@ -921,6 +1047,71 @@
             scrollBottom();
             return row;
         }
+
+        // Action toolbar (copy + translate) — only on real bot answers
+        const col = row.querySelector('.bot-col');
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
+        const langs = [
+            { code: 'nl', label: 'NL' },
+            { code: 'en', label: 'EN' },
+            { code: 'fr', label: 'FR' },
+            { code: 'de', label: 'DE' },
+        ];
+        actions.innerHTML = `
+            <button type="button" class="msg-action-btn" data-act="copy" title="Copy answer">
+                <span class="msg-action-icon">📋</span><span>Copy</span>
+            </button>
+            <div class="msg-action-tr">
+                <button type="button" class="msg-action-btn" data-act="translate" title="Translate">
+                    <span class="msg-action-icon">🌐</span><span>Translate</span>
+                </button>
+                <div class="msg-tr-pop" hidden>
+                    ${langs.map(l => `<button type="button" data-lang="${l.code}">${l.label}</button>`).join('')}
+                </div>
+            </div>
+            <span class="msg-action-feedback" aria-live="polite"></span>
+        `;
+        col.insertBefore(actions, col.querySelector('.bubble-time'));
+
+        const feedback = actions.querySelector('.msg-action-feedback');
+        const showFeedback = (msg) => {
+            feedback.textContent = msg;
+            feedback.classList.add('show');
+            setTimeout(() => feedback.classList.remove('show'), 1400);
+        };
+
+        actions.querySelector('[data-act="copy"]').addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(text);
+                showFeedback('Copied!');
+            } catch (e) {
+                const ta = document.createElement('textarea');
+                ta.value = text; document.body.appendChild(ta); ta.select();
+                try { document.execCommand('copy'); showFeedback('Copied!'); }
+                catch { showFeedback('Could not copy'); }
+                ta.remove();
+            }
+        });
+
+        const trBtn = actions.querySelector('[data-act="translate"]');
+        const pop = actions.querySelector('.msg-tr-pop');
+        trBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            pop.hidden = !pop.hidden;
+        });
+        document.addEventListener('click', (ev) => {
+            if (!pop.hidden && !actions.contains(ev.target)) pop.hidden = true;
+        });
+        pop.querySelectorAll('button[data-lang]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const target = btn.dataset.lang;
+                pop.hidden = true;
+                const src = (currentLang || 'auto');
+                const url = `https://translate.google.com/?sl=${encodeURIComponent(src)}&tl=${encodeURIComponent(target)}&op=translate&text=${encodeURIComponent(text)}`;
+                window.open(url, '_blank', 'noopener');
+            });
+        });
 
         // Anchor the new bubble at the top of the viewport, then type it out.
         scrollToTopOf(row);
@@ -1012,42 +1203,72 @@
 
     function addImage(url) {
         if (!url) return;
+        addImages([url]);
+    }
+
+    function addImages(urls) {
+        if (!Array.isArray(urls)) return;
+        const clean = [...new Set(urls.filter(Boolean))];
+        if (clean.length === 0) return;
         const row = document.createElement('div');
         row.className = 'message-row bot';
+        const cells = clean.map(u => `
+            <a href="${escAttr(u)}" target="_blank" rel="noopener" class="faq-image-link">
+                <img src="${escAttr(u)}" alt="Illustration" class="faq-image" loading="lazy">
+            </a>`).join('');
+        const stackClass = clean.length > 1 ? 'faq-image-grid' : 'faq-image-single';
         row.innerHTML = `
             <div class="bot-avatar">📷</div>
-            <div>
-                <a href="${escAttr(url)}" target="_blank" rel="noopener">
-                    <img src="${escAttr(url)}" alt="Illustration" class="faq-image" loading="lazy">
-                </a>
-            </div>`;
+            <div class="${stackClass}">${cells}</div>`;
         chatMessages.appendChild(row);
     }
 
     function addVideo(url) {
         if (!url) return;
-        const videoId = extractYouTubeId(url);
+        addVideos([url]);
+    }
+
+    function addProductLinks(links) {
+        if (!Array.isArray(links) || links.length === 0) return;
         const row = document.createElement('div');
         row.className = 'message-row bot';
-        if (videoId) {
-            const thumb = `https://img.youtube.com/vi/${videoId}/0.jpg`;
-            row.innerHTML = `
-                <div class="bot-avatar">▶️</div>
-                <div>
-                    <a href="${escAttr(url)}" target="_blank" rel="noopener" class="video-thumb-link" title="Open video on YouTube">
+        const buttons = links.map(l => {
+            const url = (l && l.url) || '';
+            const title = (l && l.title) || url;
+            if (!url) return '';
+            return `<a class="product-link" href="${escAttr(url)}" target="_blank" rel="noopener">${escHtml(title)}</a>`;
+        }).filter(Boolean).join('');
+        if (!buttons) return;
+        row.innerHTML = `
+            <div class="bot-avatar">🛒</div>
+            <div class="product-links">${buttons}</div>`;
+        chatMessages.appendChild(row);
+    }
+
+    function addVideos(urls) {
+        if (!Array.isArray(urls)) return;
+        const clean = [...new Set(urls.filter(Boolean))];
+        if (clean.length === 0) return;
+        const row = document.createElement('div');
+        row.className = 'message-row bot';
+        const cells = clean.map(u => {
+            const id = extractYouTubeId(u);
+            if (id) {
+                const thumb = `https://img.youtube.com/vi/${id}/0.jpg`;
+                return `
+                    <a href="${escAttr(u)}" target="_blank" rel="noopener" class="video-thumb-link" title="Open video on YouTube">
                         <div class="video-thumb">
                             <img src="${escAttr(thumb)}" alt="Video thumbnail" class="faq-image">
                             <span class="video-play">▶</span>
                         </div>
-                    </a>
-                </div>`;
-        } else {
-            row.innerHTML = `
-                <div class="bot-avatar">▶️</div>
-                <div>
-                    <a href="${escAttr(url)}" target="_blank" rel="noopener" class="video-link">🎬 Watch the video</a>
-                </div>`;
-        }
+                    </a>`;
+            }
+            return `<a href="${escAttr(u)}" target="_blank" rel="noopener" class="video-link">🎬 Watch the video</a>`;
+        }).join('');
+        const stack = clean.length > 1 ? 'faq-video-grid' : 'faq-video-single';
+        row.innerHTML = `
+            <div class="bot-avatar">▶️</div>
+            <div class="${stack}">${cells}</div>`;
         chatMessages.appendChild(row);
     }
 
@@ -1117,8 +1338,19 @@
 
             addMessage(answer, 'bot');
 
-            if (data.image_url) addImage(data.image_url);
-            if (data.video_url) addVideo(data.video_url);
+            if (Array.isArray(data.image_urls) && data.image_urls.length > 0) {
+                addImages(data.image_urls);
+            } else if (data.image_url) {
+                addImage(data.image_url);
+            }
+            if (Array.isArray(data.video_urls) && data.video_urls.length > 0) {
+                addVideos(data.video_urls);
+            } else if (data.video_url) {
+                addVideo(data.video_url);
+            }
+            if (Array.isArray(data.product_links) && data.product_links.length > 0) {
+                addProductLinks(data.product_links);
+            }
 
             // Inline choice buttons (e.g. "Gen 1 / Gen 2 / Gen 3")
             if (data.choices && data.choices.length > 0) {

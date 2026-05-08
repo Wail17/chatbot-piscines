@@ -165,13 +165,18 @@ def _repair_answer(text: str) -> str:
     return text
 
 
-def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
+def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, List[str]]]:
     """
-    Parse xl/drawings/*.xml to map each drawing's embed rId -> row number.
-    Returns: {drawing_file_name: {row_number_0_indexed: rId_int}}
+    Parse xl/drawings/*.xml to map each drawing's embed rIds -> row numbers.
+
+    A single Excel row can host multiple images (multiple anchors targeting the
+    same starting row). Earlier versions kept only the last rId per row;
+    we now collect them all so multi-photo answers work.
+
+    Returns: {drawing_file_name: {row_number_0_indexed: [rId, rId, ...]}}
     Only for the main "Alle vragen" sheet (drawing1.xml typically).
     """
-    drawing_rows: Dict[str, Dict[str, int]] = {}
+    drawing_rows: Dict[str, Dict[int, List[str]]] = {}
     try:
         with zipfile.ZipFile(xlsx_path) as z:
             for name in z.namelist():
@@ -182,7 +187,7 @@ def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
                     root = ET.fromstring(content)
                 except ET.ParseError:
                     continue
-                row_to_rid: Dict[int, str] = {}
+                row_to_rids: Dict[int, List[str]] = {}
                 for anchor in root.iter():
                     if not anchor.tag.endswith("twoCellAnchor") and not anchor.tag.endswith("oneCellAnchor"):
                         continue
@@ -205,8 +210,8 @@ def _parse_drawing_row_map(xlsx_path: Path) -> Dict[str, Dict[int, int]]:
                         continue
                     embed = blip.get(f"{{{REL_NS}}}embed")
                     if embed:
-                        row_to_rid[row_num] = embed
-                drawing_rows[name] = row_to_rid
+                        row_to_rids.setdefault(row_num, []).append(embed)
+                drawing_rows[name] = row_to_rids
     except Exception as e:
         logger.warning("Could not parse drawings: %s", e)
     return drawing_rows
@@ -293,10 +298,14 @@ def _resolve_sheet_file(xlsx_path: Path, sheet_name: str) -> Optional[str]:
     return None
 
 
-def extract_images(xlsx_path: Path, images_dir: Path) -> Dict[int, str]:
+def extract_images(xlsx_path: Path, images_dir: Path) -> Dict[int, List[str]]:
     """
-    Extract images embedded in the main sheet and map them to row numbers (1-indexed, matching Excel row numbers).
-    Saves to images_dir as row_<N>.<ext> and returns {excel_row: filename}.
+    Extract images embedded in the main sheet and map them to row numbers
+    (1-indexed, matching Excel row numbers). Multiple images per row are supported.
+
+    Saves to ``images_dir`` as ``row_<N>.<ext>`` for the first image and
+    ``row_<N>_<i>.<ext>`` (i=2,3,…) for subsequent ones. Returns a mapping
+    ``{excel_row: [filename, filename, …]}``.
     """
     images_dir.mkdir(parents=True, exist_ok=True)
     for old in images_dir.glob("row_*.*"):
@@ -315,27 +324,33 @@ def extract_images(xlsx_path: Path, images_dir: Path) -> Dict[int, str]:
     drawing_rows = _parse_drawing_row_map(xlsx_path).get(drawing_file, {})
     drawing_rels = _parse_drawing_rels(xlsx_path).get(drawing_file, {})
 
-    row_to_filename: Dict[int, str] = {}
+    row_to_filenames: Dict[int, List[str]] = {}
+    total = 0
     with zipfile.ZipFile(xlsx_path) as z:
-        for row_num, rid in drawing_rows.items():
-            media_rel = drawing_rels.get(rid)
-            if not media_rel:
-                continue
-            media_path = media_rel if media_rel.startswith("xl/") else f"xl/{media_rel}"
-            try:
-                data = z.read(media_path)
-            except KeyError:
-                continue
-            ext = os.path.splitext(media_path)[1].lower() or ".png"
+        for row_num, rids in drawing_rows.items():
             excel_row = row_num + 1
-            filename = f"row_{excel_row}{ext}"
-            out_path = images_dir / filename
-            with open(out_path, "wb") as f:
-                f.write(data)
-            row_to_filename[excel_row] = filename
+            for idx, rid in enumerate(rids):
+                media_rel = drawing_rels.get(rid)
+                if not media_rel:
+                    continue
+                media_path = media_rel if media_rel.startswith("xl/") else f"xl/{media_rel}"
+                try:
+                    data = z.read(media_path)
+                except KeyError:
+                    continue
+                ext = os.path.splitext(media_path)[1].lower() or ".png"
+                if idx == 0:
+                    filename = f"row_{excel_row}{ext}"
+                else:
+                    filename = f"row_{excel_row}_{idx + 1}{ext}"
+                with open(images_dir / filename, "wb") as f:
+                    f.write(data)
+                row_to_filenames.setdefault(excel_row, []).append(filename)
+                total += 1
 
-    logger.info("Extracted %d images to %s", len(row_to_filename), images_dir)
-    return row_to_filename
+    logger.info("Extracted %d images for %d rows to %s",
+                total, len(row_to_filenames), images_dir)
+    return row_to_filenames
 
 
 def load_synonym_sheets(xlsx_path: Path) -> List[List[str]]:
@@ -359,11 +374,96 @@ def load_synonym_sheets(xlsx_path: Path) -> List[List[str]]:
     return groups
 
 
-def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, Any]]:
+def _detect_product_links_col(ws) -> Optional[int]:
+    """Find the column index (0-based) of an optional product-links column.
+
+    Recognized header names (case-insensitive, accents/spacing tolerated):
+    Producten, Product, ProductLinks, Verkooplinks, Verkoop, ShopLinks,
+    Webshop, WebshopLinks.
+    """
+    aliases = {
+        "producten", "product", "productlinks", "product links",
+        "verkoop", "verkooplinks", "verkoop links",
+        "shop", "shoplinks", "shop links",
+        "webshop", "webshoplinks", "webshop links",
+    }
+    try:
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+    except StopIteration:
+        return None
+    for idx, cell in enumerate(header_row):
+        name = str(cell or "").strip().lower()
+        if name and name in aliases:
+            return idx
+    return None
+
+
+def _parse_product_links(raw: str) -> List[Dict[str, str]]:
+    """Parse a multi-link cell into a list of {title, url} dicts.
+
+    Accepted formats per line / separator (newline, ``;``, ``|``):
+    - ``https://example.com/foo`` → title becomes the slug
+    - ``Doseerpomp | https://example.com/foo``  (title before URL, ``|`` or `` - ``)
+    - ``[Doseerpomp](https://example.com/foo)`` (markdown link)
+    """
+    if not raw:
+        return []
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    items = re.split(r"[\r\n;]+", raw)
+    md_pat = re.compile(r"^\s*\[([^\]]+)\]\(([^)]+)\)\s*$")
+    for item in items:
+        item = item.strip()
+        if not item:
+            continue
+        m = md_pat.match(item)
+        title = ""
+        url = ""
+        if m:
+            title = m.group(1).strip()
+            url = m.group(2).strip()
+        elif "|" in item:
+            parts = item.split("|", 1)
+            title = parts[0].strip()
+            url = parts[1].strip() if len(parts) > 1 else ""
+        elif " - " in item and ("http" in item or "www" in item):
+            parts = item.split(" - ", 1)
+            if "http" in parts[1] or "www" in parts[1]:
+                title = parts[0].strip()
+                url = parts[1].strip()
+            else:
+                url = item
+        else:
+            url = item
+
+        if not url:
+            continue
+        if not (url.startswith("http") or url.startswith("www")):
+            # not a usable URL
+            continue
+        if not url.startswith("http"):
+            url = "https://" + url
+        if url in seen:
+            continue
+        seen.add(url)
+        if not title:
+            try:
+                from urllib.parse import urlparse
+                p = urlparse(url)
+                slug = (p.path.strip("/").split("/")[-1] or p.netloc).replace("-", " ").replace("_", " ")
+                title = slug.title() if slug else p.netloc
+            except Exception:
+                title = url
+        out.append({"title": title, "url": url})
+    return out
+
+
+def build_entries(xlsx_path: Path, image_map: Dict[int, List[str]]) -> List[Dict[str, Any]]:
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     if MAIN_SHEET not in wb.sheetnames:
         raise RuntimeError(f"Sheet '{MAIN_SHEET}' not found in {xlsx_path}")
     ws = wb[MAIN_SHEET]
+    products_col_idx = _detect_product_links_col(ws)
 
     entries: List[Dict[str, Any]] = []
     excel_row = 1
@@ -415,12 +515,38 @@ def build_entries(xlsx_path: Path, image_map: Dict[int, str]) -> List[Dict[str, 
         }
 
         filmpje = _cell(row, "filmpje")
-        if filmpje and (filmpje.startswith("http") or "youtube" in filmpje.lower() or "youtu.be" in filmpje.lower()):
-            entry["video_url"] = filmpje
+        if filmpje:
+            video_candidates = re.split(r"[\n\r;,|\s]+", filmpje)
+            video_urls: List[str] = []
+            for cand in video_candidates:
+                cand = cand.strip().strip("()<>[]")
+                if not cand:
+                    continue
+                low = cand.lower()
+                if low.startswith("http") or "youtube" in low or "youtu.be" in low:
+                    if cand not in video_urls:
+                        video_urls.append(cand)
+            if video_urls:
+                entry["video_url"] = video_urls[0]
+                if len(video_urls) > 1:
+                    entry["video_urls"] = video_urls
+
+        if products_col_idx is not None and products_col_idx < len(row):
+            raw_products = row[products_col_idx]
+            if raw_products:
+                links = _parse_product_links(str(raw_products))
+                if links:
+                    entry["product_links"] = links
 
         if excel_row in image_map:
-            rel = f"/faq_images/{image_map[excel_row]}"
-            entry["image_path"] = rel
+            files = image_map[excel_row]
+            if isinstance(files, str):
+                files = [files]
+            paths = [f"/faq_images/{name}" for name in files if name]
+            if paths:
+                entry["image_path"] = paths[0]
+                if len(paths) > 1:
+                    entry["image_paths"] = paths
 
         de_q = _cell(row, "de_frage")
         de_a = _cell(row, "de_antwort")
