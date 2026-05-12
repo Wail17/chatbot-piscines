@@ -1568,6 +1568,10 @@
         <span>Unanswered questions</span>
         <span class="nav-badge" id="nav-gaps-badge" style="display:none">!</span>
       </div>
+      <div class="nav-item" onclick="showSection('simulator')" id="nav-simulator">
+        <span class="nav-icon">🧪</span>
+        <span>Simulator</span>
+      </div>
     </nav>
 
     <div class="sidebar-footer">
@@ -1719,6 +1723,47 @@
           <div class="loading-state"><div class="spinner"></div><span>Loading…</span></div>
         </div>
         <div id="faq-pagination"></div>
+      </div>
+
+      <!-- ─────────────────────────────────────────────────
+           SECTION: Simulator
+      ───────────────────────────────────────────────── -->
+      <div class="section" id="section-simulator">
+        <div class="section-header">
+          <h2>🧪 Simulator</h2>
+          <p>Pose une question, vois ce que le bot répondrait, puis édite la FAQ source si besoin. N'affecte ni le cache ni les stats.</p>
+        </div>
+
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-bottom:16px;">
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <label style="font-weight:600;font-size:13px;">Question à tester</label>
+            <textarea id="sim-query" rows="3" style="width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-family:inherit;font-size:14px;" placeholder="Ex: Hoe reset ik mijn Wifipool Gen 2 ?"></textarea>
+
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <label style="font-weight:600;font-size:13px;">Langue:</label>
+              <select id="sim-lang" style="padding:8px;border:1px solid #d1d5db;border-radius:6px;">
+                <option value="nl">Nederlands</option>
+                <option value="fr">Français</option>
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+              </select>
+              <button class="btn btn-primary" onclick="runSimulator()" id="sim-run-btn">▶ Tester</button>
+              <span id="sim-status" style="font-size:13px;color:#6b7280;"></span>
+            </div>
+          </div>
+        </div>
+
+        <div id="sim-result" style="display:none;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;">
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;font-size:13px;">
+            <div><strong>Source :</strong> <span id="sim-source"></span></div>
+            <div><strong>Confidence :</strong> <span id="sim-confidence"></span></div>
+            <div><strong>Row :</strong> <span id="sim-row"></span></div>
+            <div><strong>Out of scope :</strong> <span id="sim-oos"></span></div>
+          </div>
+          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px;white-space:pre-wrap;font-size:14px;line-height:1.5;max-height:400px;overflow:auto;" id="sim-answer"></div>
+          <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;" id="sim-actions"></div>
+          <div id="sim-error" style="display:none;margin-top:12px;padding:12px;background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;color:#991b1b;font-size:13px;"></div>
+        </div>
       </div>
 
     </div><!-- /content -->
@@ -1944,7 +1989,8 @@ const API = {
 const SECTION_TITLES = {
   overview: 'Overzicht',
   faq: 'FAQ per categorie 📚',
-  gaps: 'Unanswered questions ❓'
+  gaps: 'Unanswered questions ❓',
+  simulator: 'Simulator 🧪'
 };
 
 function showSection(name) {
@@ -2670,6 +2716,76 @@ document.addEventListener('keydown', e => {
     });
   }
 });
+
+/* ─── Simulator ───────────────────────────────────────────── */
+async function runSimulator() {
+  const btn = document.getElementById('sim-run-btn');
+  const status = document.getElementById('sim-status');
+  const resultBox = document.getElementById('sim-result');
+  const errBox = document.getElementById('sim-error');
+
+  const query = (document.getElementById('sim-query').value || '').trim();
+  const lang = document.getElementById('sim-lang').value || 'nl';
+  if (!query) {
+    showToast('Tape une question d\'abord', 'warn');
+    return;
+  }
+
+  btn.disabled = true;
+  status.textContent = 'Claude réfléchit…';
+  resultBox.style.display = 'none';
+  errBox.style.display = 'none';
+
+  try {
+    const data = await API.post('/admin/simulate', { query, language: lang });
+
+    document.getElementById('sim-source').textContent = data.source || '?';
+    document.getElementById('sim-confidence').textContent =
+      (data.confidence != null) ? Number(data.confidence).toFixed(2) : '—';
+    document.getElementById('sim-row').textContent =
+      (data.primary_source != null) ? `#${data.primary_source}` : '—';
+    document.getElementById('sim-oos').textContent = data.out_of_scope ? 'YES ⚠️' : 'no';
+    document.getElementById('sim-answer').textContent = data.answer || '(empty answer)';
+
+    // Actions
+    const actions = document.getElementById('sim-actions');
+    actions.innerHTML = '';
+    if (data.matched_row) {
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-primary';
+      editBtn.innerHTML = '✏️ Éditer cette FAQ row';
+      editBtn.onclick = () => {
+        // Switch to FAQ section and open the row for editing
+        showSection('faq');
+        setTimeout(() => {
+          if (data.matched_id && typeof openEditModal === 'function') {
+            openEditModal(data.matched_id);
+          } else {
+            // Fallback: scroll to row + search
+            const search = document.getElementById('faq-search-input');
+            if (search) { search.value = data.matched_row.question || ''; onSearchInput(); }
+          }
+        }, 200);
+      };
+      actions.appendChild(editBtn);
+    }
+
+    if (data.error) {
+      errBox.textContent = 'Anthropic error: ' + data.error;
+      errBox.style.display = 'block';
+    }
+
+    resultBox.style.display = 'block';
+    status.textContent = '';
+  } catch (e) {
+    errBox.textContent = 'Erreur réseau / API: ' + (e.message || e);
+    errBox.style.display = 'block';
+    resultBox.style.display = 'block';
+    status.textContent = '';
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 /* ─── Init ────────────────────────────────────────────────── */
 async function bootDashboard() {

@@ -246,3 +246,84 @@ async def reload_faq_index():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reloading FAQ: {str(e)}")
+
+
+# ==================== SIMULATOR ====================
+class SimulateRequest(BaseModel):
+    query: str
+    language: Optional[str] = "nl"
+
+
+@admin_router.post("/simulate")
+async def simulate_chat(data: SimulateRequest):
+    """Simulate a /chat call WITHOUT touching response cache or analytics.
+
+    Lets the admin preview what the bot would answer for a given question
+    and language, then jump to edit the FAQ row used as primary_source.
+    Returns the same shape as /chat plus a `matched_row` hint with the
+    matched FAQ entry id so the UI can deep-link to the editor.
+    """
+    q = (data.query or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    lang = (data.language or "nl").strip().lower()
+    if lang not in {"nl", "fr", "en", "de"}:
+        lang = "nl"
+
+    # Use expert_answer directly so we bypass cache, analytics and
+    # the side-effects of the /chat endpoint.
+    try:
+        from .rag import expert_answer
+        from .main import _FAQ
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"backend not ready: {exc}")
+
+    if not _FAQ:
+        raise HTTPException(status_code=503, detail="FAQ not loaded")
+
+    out = expert_answer(q, lang, _FAQ, history=None)
+
+    matched_row = None
+    matched_id = None
+    primary = out.get("primary_source")
+    if isinstance(primary, int):
+        for r in _FAQ:
+            if r.get("excel_row") == primary:
+                matched_row = {
+                    "excel_row": primary,
+                    "category": r.get("Categorie") or r.get("category"),
+                    "question": r.get("Vraag") or r.get("question"),
+                    "answer": r.get("Antwoord") or r.get("answer"),
+                    "tags": r.get("tags") or [],
+                }
+                matched_id = r.get("id")
+                break
+
+    # Also try to find the FAQ entry id (UUID) from the JSONL store
+    if matched_row and not matched_id:
+        try:
+            items = load_faq_jsonl()
+            for it in items:
+                if it.get("excel_row") == primary:
+                    matched_id = it.get("id")
+                    break
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "query": q,
+        "language": lang,
+        "answer": out.get("answer") or "",
+        "source": "expert" if (out.get("answer") and not out.get("error")) else "error",
+        "confidence": out.get("confidence"),
+        "primary_source": primary,
+        "out_of_scope": bool(out.get("out_of_scope")),
+        "ambiguous": bool(out.get("ambiguous")),
+        "alternative_questions": out.get("alternative_questions") or [],
+        "choices": out.get("choices") or [],
+        "error": out.get("error"),
+        "matched_row": matched_row,
+        "matched_id": matched_id,
+    }
