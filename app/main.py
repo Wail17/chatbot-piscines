@@ -2908,7 +2908,24 @@ def chat(req: ChatRequest, request: Request):
                     cache_set(normalize_for_cache(q), result)
                 return result
             else:
-                logger.info(f"expert_answer returned empty/error, falling back: {ex.get('error')}")
+                _err = ex.get('error') or ''
+                logger.info(f"expert_answer returned empty/error, falling back: {_err}")
+                # When Anthropic API itself is failing (auth/rate/quota),
+                # the keyword fallbacks below produce confidently-wrong answers
+                # in the wrong language. Better to surface an honest error.
+                if isinstance(_err, str) and _err.startswith("api_error"):
+                    _api_err_msg = {
+                        "nl": "Onze AI-assistent is tijdelijk niet beschikbaar. Probeer het binnen enkele minuten opnieuw of neem contact op met de ondersteuning.",
+                        "fr": "Notre assistant IA est temporairement indisponible. Reessayez dans quelques minutes ou contactez le support.",
+                        "en": "Our AI assistant is temporarily unavailable. Please try again in a few minutes or contact support.",
+                        "de": "Unser KI-Assistent ist vorubergehend nicht verfugbar. Bitte versuche es in wenigen Minuten erneut oder kontaktiere den Support.",
+                    }.get(lang_code, "Our AI assistant is temporarily unavailable. Please try again shortly.")
+                    return {
+                        "answer": _api_err_msg,
+                        "citations": [],
+                        "source": "api_error",
+                        "error_kind": _err,
+                    }
         except Exception as _ex_err:
             logger.warning(f"expert_answer failed, falling back: {_ex_err}")
 

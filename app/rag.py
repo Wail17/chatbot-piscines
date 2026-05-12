@@ -247,6 +247,10 @@ _EXPERT_SYSTEM_BASE = (
     "electrolysers, pH/ORP dosing systems, frequency regulators, and pool accessories.\n\n"
     "You will receive the FAQ knowledge base below. Answer the user's question as a "
     "knowledgeable human expert would — conversational, confident, clear, and concise.\n\n"
+    "PRIMARY DIRECTIVE: When the user asks a real technical or product question, "
+    "ANSWER IT directly using the FAQ. Do NOT punt to clarification or 'pick a topic' "
+    "menus unless the question is genuinely unanswerable from the FAQ. The user's "
+    "default expectation is a useful answer, not a menu.\n\n"
     "STRICT RULES:\n"
     "- Use ONLY information from the FAQ below. Never invent procedures, error codes, "
     "part numbers, serial numbers, URLs, or contact details.\n"
@@ -255,14 +259,11 @@ _EXPERT_SYSTEM_BASE = (
     "out_of_scope=true.\n"
     "- If the user's question is genuinely not covered by the FAQ, say so clearly "
     "instead of guessing.\n"
-    "- If the question is TOO GENERAL or VAGUE (e.g. 'tell me about Beniferro', "
-    "'what can you teach me', 'help me with my pool'), do NOT pick a random FAQ "
-    "row to answer. Instead: briefly introduce what you can help with (Wifipool "
-    "controllers, pH/RX dosing, salt electrolysis, frequency regulator, "
-    "installation, troubleshooting) and invite the user to ask a more specific "
-    "question. Populate 'choices' with 3-4 short example topics they might want "
-    "(in their language), so they can click one to drill down. Set "
-    "primary_source=null and confidence below 0.4 for these vague questions.\n"
+    "- Reserve the 'vague question' path ONLY for actually empty/meaningless openers "
+    "like 'hi', 'tell me about Beniferro', 'what can you teach me'. A real technical "
+    "question — even if short — must get a real answer. When in doubt, ANSWER. "
+    "Populate 'choices' with 3-4 short example topics only in this rare vague case, "
+    "and set primary_source=null and confidence below 0.4.\n"
     "- Combine information from multiple FAQ rows when the question is hybrid.\n"
     "- Use the prior conversation turns as context. If the user gives a short reply "
     "(e.g. 'gen 2', 'oui', 'the first one'), interpret it as an answer to YOUR previous "
@@ -401,7 +402,7 @@ def expert_answer(
     try:
         resp = anthropic_client.messages.create(
             model=_EXPERT_MODEL,
-            max_tokens=1000,
+            max_tokens=1500,
             temperature=0.2,
             system=[
                 {"type": "text", "text": system_prompt},
@@ -414,12 +415,25 @@ def expert_answer(
             messages=_build_expert_messages(question, history),
         )
         raw = resp.content[0].text if resp.content else ""
+        logger.info(
+            f"expert_answer ok | model={_EXPERT_MODEL} | tokens in/out="
+            f"{getattr(resp.usage, 'input_tokens', '?')}/{getattr(resp.usage, 'output_tokens', '?')}"
+            f" | cache_read={getattr(resp.usage, 'cache_read_input_tokens', '?')}"
+        )
     except Exception as e:
+        logger.warning(
+            f"expert_answer Anthropic API FAILED — {type(e).__name__}: {e} "
+            f"| question[:80]={question[:80]!r} | model={_EXPERT_MODEL}"
+        )
         log_error(e, "expert_answer API call failed", question=question[:80])
-        return {**empty, "error": f"api_error: {e}"}
+        return {**empty, "error": f"api_error: {type(e).__name__}: {e}"}
 
     data = _extract_json(raw)
     if not data:
+        logger.warning(
+            f"expert_answer JSON parse failed — Claude returned malformed JSON. "
+            f"raw[:300]={raw[:300]!r}"
+        )
         return {**empty, "error": "json_parse_failed", "raw": raw[:400]}
 
     return {
@@ -747,7 +761,7 @@ def _expand_queries_with_llm(question: str, n: int = 3) -> List[str]:
     Returns:
         List of reformulated queries
     """
-    if client is None:
+    if openai_client is None:
         logger.debug("OpenAI client not available for query expansion")
         return []
 
@@ -757,7 +771,7 @@ def _expand_queries_with_llm(question: str, n: int = 3) -> List[str]:
             f"Donne {n} lignes, sans numéros, sans guillemets.\n\nQuestion:\n{question}"
         )
 
-        resp = client.chat.completions.create(
+        resp = openai_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
@@ -1183,7 +1197,7 @@ def generate_answer(question: str, docs: List[Any], chosen_gen: Optional[str] = 
             return answer, citations
 
     # 2) LLM generation fallback
-    if client is None:
+    if openai_client is None:
         logger.warning("OpenAI client not available for answer generation")
         error_msg = (
             "Ik kan momenteel geen automatisch antwoord genereren vanwege een configuratieprobleem. "
@@ -1194,7 +1208,7 @@ def generate_answer(question: str, docs: List[Any], chosen_gen: Optional[str] = 
     try:
         messages = _build_messages(question, docs)
 
-        resp = client.chat.completions.create(
+        resp = openai_client.chat.completions.create(
             model=LLM_MODEL,
             messages=messages,
             temperature=0.2,
@@ -1345,7 +1359,7 @@ def retrieve_with_reasoning(
         return docs, None, 0.3
 
     # If reasoning is disabled, return basic results
-    if not use_reasoning or not client:
+    if not use_reasoning or not openai_client:
         best_score = scored_docs[0][1] if scored_docs else 1e9
         # Convert distance to similarity
         similarity = 1.0 / (1.0 + best_score)
