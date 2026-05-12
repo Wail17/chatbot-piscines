@@ -425,6 +425,21 @@ def _reload_faq() -> Tuple[int, List[dict]]:
     _reset_faq_embeddings()
     for row in _FAQ:
         row["_embedding"] = _EMBED_UNSET
+    # Invalidate the cached FAQ prompt context in rag.py so the next
+    # expert_answer rebuilds it with the new data (edits in the middle of
+    # the FAQ were previously kept silently because the cache signature
+    # only looked at length + first 5 rows).
+    try:
+        from .rag import invalidate_expert_faq_context
+        invalidate_expert_faq_context()
+    except Exception as _e:
+        logger.debug(f"Could not invalidate expert FAQ context: {_e}")
+    # Also clear the answer cache — old questions may now have new answers.
+    try:
+        from .response_cache import cache_invalidate_all
+        cache_invalidate_all()
+    except Exception:
+        pass
     return (len(_FAQ), _FAQ)
 
 _reload_faq()

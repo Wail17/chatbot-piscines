@@ -330,9 +330,32 @@ def _build_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
+def _entries_signature(entries: List[Dict[str, Any]]) -> int:
+    """Content-aware signature: detects edits anywhere in the FAQ, not just
+    additions/deletions. Uses a rolling hash over (excel_row, question, answer)
+    of every entry so any edit invalidates the cache."""
+    h = hash(len(entries))
+    for e in entries:
+        h ^= hash((
+            e.get("excel_row"),
+            (e.get("Vraag") or e.get("question") or ""),
+            (e.get("Antwoord") or e.get("answer") or ""),
+        ))
+    return h
+
+
+def invalidate_expert_faq_context() -> None:
+    """Force-clear the cached FAQ context. Called from main._reload_faq after
+    any FAQ create/update/delete so the next expert_answer rebuilds the prompt."""
+    global _EXPERT_FAQ_CONTEXT, _EXPERT_FAQ_CACHE_SIG
+    _EXPERT_FAQ_CONTEXT = None
+    _EXPERT_FAQ_CACHE_SIG = None
+    logger.info("Expert FAQ context invalidated — will rebuild on next request")
+
+
 def _get_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
     global _EXPERT_FAQ_CONTEXT, _EXPERT_FAQ_CACHE_SIG
-    sig = (len(entries), tuple(e.get("excel_row") for e in entries[:5]))
+    sig = _entries_signature(entries)
     if _EXPERT_FAQ_CONTEXT is None or _EXPERT_FAQ_CACHE_SIG != sig:
         _EXPERT_FAQ_CONTEXT = _build_expert_faq_context(entries)
         _EXPERT_FAQ_CACHE_SIG = sig
