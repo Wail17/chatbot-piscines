@@ -57,12 +57,28 @@ def load_faq_jsonl() -> List[Dict[str, Any]]:
     return items
 
 def save_faq_jsonl(items: List[Dict[str, Any]]) -> None:
-    """Save all entries to JSONL file"""
+    """Save all entries to JSONL file.
+
+    Also invalidates the Excel-derived faq_index.json so that the next
+    _reload_faq() reads from this freshly-written JSONL (the source of
+    truth for admin edits) instead of returning the stale Excel snapshot.
+    """
     os.makedirs(os.path.dirname(FAQ_FILE), exist_ok=True)
 
     with open(FAQ_FILE, 'w', encoding='utf-8') as f:
         for item in items:
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
+
+    # Force _reload_faq to use the JSONL by removing the Excel-derived index.
+    # Without this, _load_faq_from_store() returns the pre-edit data and
+    # admin updates never propagate to /chat or /admin/simulate.
+    try:
+        from .config import STORE_DIR
+        idx = os.path.join(STORE_DIR, "faq_index.json")
+        if os.path.exists(idx):
+            os.remove(idx)
+    except Exception:
+        pass
 
 def normalize_faq_item(item: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize FAQ item for display"""
