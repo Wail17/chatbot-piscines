@@ -2181,9 +2181,9 @@ def _find_row_by_ref(ref_q: str) -> dict | None:
 
 # options / gen
 _GEN_ALIASES: Dict[str, set] = {
-    "gen1": {"gen1", "gen 1", "g1", "generation 1"},
-    "gen2": {"gen2", "gen 2", "g2", "generation 2"},
-    "gen3": {"gen3", "gen 3", "g3", "generation 3"},
+    "gen1": {"gen1", "gen 1", "g1", "generation 1", "generatie 1", "première", "premiere", "first", "eerste", "erste", "1"},
+    "gen2": {"gen2", "gen 2", "g2", "generation 2", "generatie 2", "deuxième", "deuxieme", "second", "tweede", "zweite", "2"},
+    "gen3": {"gen3", "gen 3", "g3", "generation 3", "generatie 3", "troisième", "troisieme", "third", "derde", "dritte", "3"},
 }
 _DEVICE_ALIASES: Dict[str, set] = {
     "wifipool": {"wifipool", "wifi", "wifi apparaat", "wifi-apparaat"},
@@ -2820,15 +2820,30 @@ def chat(req: ChatRequest, request: Request):
     if not _check_rate_limit(client_id):
         raise HTTPException(status_code=429, detail="Te veel verzoeken. Wacht even en probeer opnieuw.")
 
+    # ── Follow-up reply detection ────────────────────────────────────────────
+    # When the bot asked a clarifying question on the previous turn (e.g.
+    # "Gen 1 or Gen 2?") and the user replies with a short choice ("1", "gen 2",
+    # "ik bedoel gen 1"), bypass the preprocessor + cache + expert mode so the
+    # legacy follow-up resolver downstream can route the answer correctly.
+    _has_pending = bool(_PENDING_BY_CLIENT.get(client_id)) if client_id else False
+    _is_followup_reply = bool(q) and _has_pending and _looks_like_followup_choice(q)
+
     # ── Query preprocessor: greetings / thanks / out-of-scope ───────────────
-    # Skip if the user has an active conversation — short replies ("1", "oui",
-    # "gen 2") are meaningful follow-ups, not empty/out-of-scope queries.
-    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref and not _get_history(client_id):
+    # We run greetings/thanks/goodbye detection EVEN WHEN there is history
+    # (politesse mid-conversation should still be handled politely instead of
+    # being routed to RAG). We only skip the preprocessor on pending follow-up
+    # replies so a "1" doesn't get classified as empty-query.
+    if _PREPROCESSOR_AVAILABLE and q and not clarify_ref and not _is_followup_reply:
         try:
             processed = preprocess_query(q)
+            # Always honor greeting / thanks / goodbye. Skip empty/spam/out-of-scope
+            # responses when there is conversation history — those are likely
+            # follow-up replies the preprocessor misclassifies.
+            allowed_with_history = {QueryIntent.GREETING, QueryIntent.THANKS, QueryIntent.GOODBYE}
+            has_history = bool(_get_history(client_id))
             if processed.immediate_response is not None:
-                # Greeting, thanks, goodbye, out-of-scope → return immediately (no API cost)
-                return processed.immediate_response
+                if not has_history or processed.intent in allowed_with_history:
+                    return processed.immediate_response
         except Exception as _pe:
             logger.debug(f"Preprocessor error: {_pe}")
 
@@ -2836,6 +2851,13 @@ def chat(req: ChatRequest, request: Request):
     explicit_lang = (getattr(req, "language", None) or "").strip().lower()
     if explicit_lang in {"nl", "fr", "en", "de"}:
         lang_code = explicit_lang
+    elif _is_followup_reply:
+        # Follow-up replies ("1", "gen 2", "ik bedoel gen 1") are too short for
+        # the language detector — use the pending follow-up language so the
+        # answer stays in the language of the original question.
+        pending_lang = (_PENDING_BY_CLIENT.get(client_id) or {}).get("language") if client_id else None
+        sticky = _get_client_lang(client_id)
+        lang_code = pending_lang or sticky or "en"
     else:
         lang_code = detect_language_code(q)
         if not lang_code:
@@ -2866,8 +2888,8 @@ def chat(req: ChatRequest, request: Request):
     if q:
         track_question(q, language=lang_code, source="api")
 
-    # ── Response cache (only for non-clarify requests AND no conversation history) ───
-    if q and not clarify_ref and not _get_history(client_id):
+    # ── Response cache (only for non-clarify, no history, no pending follow-up) ───
+    if q and not clarify_ref and not _get_history(client_id) and not _is_followup_reply:
         cache_key = normalize_for_cache(q)
         cached = cache_get(cache_key)
         if cached is not None:
@@ -2878,7 +2900,9 @@ def chat(req: ChatRequest, request: Request):
     # Primary answer path: let the LLM act as a Wifipool/Beniferro expert that has
     # the full 308-row FAQ in its (cached) context, and generate a natural answer
     # in the user's language. Falls back to legacy cascade on any error.
-    if q and not clarify_ref and _FAQ:
+    # Skip on follow-up replies so the legacy resolver downstream can match the
+    # choice to the right FAQ row (Gen 1 vs Gen 2, etc.).
+    if q and not clarify_ref and _FAQ and not _is_followup_reply:
         try:
             history = _get_history(client_id)
             ex = expert_answer(q, lang_code, _FAQ, history=history)
