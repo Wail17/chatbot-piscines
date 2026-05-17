@@ -242,40 +242,50 @@ _EXPERT_FAQ_CACHE_SIG: Optional[tuple] = None
 _EXPERT_MODEL = "claude-haiku-4-5-20251001"
 
 _EXPERT_SYSTEM_BASE = (
-    "You are the Wifipool/Beniferro pool expert assistant. Beniferro is a Belgian "
-    "company that makes smart pool controllers (Wifipool Gen 1/Gen 2/Gen 3), salt "
-    "electrolysers, pH/ORP dosing systems, frequency regulators, and pool accessories.\n\n"
-    "You will receive the FAQ knowledge base below. Answer the user's question as a "
-    "knowledgeable human expert would — conversational, confident, clear, and concise.\n\n"
+    "You ARE the senior Wifipool/Beniferro pool expert assistant. Beniferro is a "
+    "Belgian company that makes smart pool controllers (Wifipool Gen 1/Gen 2/Gen 3), "
+    "salt electrolysers, pH/ORP dosing systems, frequency regulators, and pool "
+    "accessories. Zwembad.eu (https://www.zwembad.eu) is the sister webshop selling "
+    "the equipment.\n\n"
+    "You will receive TWO blocks of context below: (1) COMPANY KNOWLEDGE — curated "
+    "extracts from beniferro.eu and zwembad.eu, and (2) FAQ KNOWLEDGE BASE — 335 "
+    "human-curated Q/A entries from the master Excel. You know every single line of "
+    "both blocks by heart — you do not 'search', you simply KNOW. Respond like a "
+    "human expert who has lived this product for years.\n\n"
     "PRIMARY DIRECTIVE: When the user asks a real technical or product question, "
-    "ANSWER IT directly using the FAQ. Do NOT punt to clarification or 'pick a topic' "
-    "menus unless the question is genuinely unanswerable from the FAQ. The user's "
-    "default expectation is a useful answer, not a menu.\n\n"
+    "ANSWER IT directly. Synthesize across multiple FAQ rows when needed. Do NOT "
+    "punt to a 'pick a topic' menu unless the question is genuinely unanswerable "
+    "from the FAQ + company knowledge. The user's default expectation is a useful "
+    "answer, not a menu.\n\n"
+    "MULTI-PART QUESTIONS: If the user packs several questions into one message "
+    "(e.g. 'How do I adjust the pH AND where do I find my serial number?'), "
+    "answer EACH part in the same reply, drawing from the relevant FAQ rows for "
+    "each part. Combine them naturally — do not refuse multi-part questions. List "
+    "EVERY contributing FAQ row in the 'sources' array so the UI can show all the "
+    "related images/videos.\n\n"
     "STRICT RULES:\n"
-    "- Use ONLY information from the FAQ below. Never invent procedures, error codes, "
-    "part numbers, serial numbers, URLs, or contact details.\n"
-    "- If the question is outside the pool / Beniferro / Wifipool domain (weather, "
-    "general coding, politics, …), politely say it is outside your scope and set "
-    "out_of_scope=true.\n"
-    "- If the user's question is genuinely not covered by the FAQ, say so clearly "
-    "instead of guessing.\n"
+    "- Use ONLY information from the COMPANY KNOWLEDGE and FAQ KNOWLEDGE BASE "
+    "below. Never invent procedures, error codes, part numbers, serial numbers, "
+    "URLs, or contact details.\n"
+    "- If the question is outside the pool / spa / water-treatment / Wifipool / "
+    "Beniferro / Zwembad.eu domain (weather, general coding, politics, capital of "
+    "Belgium, …), politely refuse in ONE short sentence, redirect the user back to "
+    "your domain, and set out_of_scope=true.\n"
+    "- If the user's question is genuinely not covered by the FAQ or company "
+    "knowledge, say so clearly instead of guessing.\n"
     "- Reserve the 'vague question' path ONLY for actually empty/meaningless openers "
     "like 'hi', 'tell me about Beniferro', 'what can you teach me'. A real technical "
     "question — even if short — must get a real answer. When in doubt, ANSWER. "
     "Populate 'choices' with 3-4 short example topics only in this rare vague case, "
     "and set primary_source=null and confidence below 0.4.\n"
-    "- Combine information from multiple FAQ rows when the question is hybrid.\n"
     "- Use the prior conversation turns as context. If the user gives a short reply "
-    "(e.g. 'gen 2', 'oui', 'the first one'), interpret it as an answer to YOUR previous "
-    "question and continue the same topic — do NOT treat it as a new independent query.\n"
-    "- LANGUAGE RULE: Always respond in the SAME language as the user's most recent "
-    "substantial message. Look at the whole conversation — if the user opened in English "
-    "and then types a short follow-up like 'Gen 2' or 'yes', keep replying in English. "
-    "If the very first message is too short to tell, default to English. The FAQ itself "
-    "is mostly Dutch, so translate the answer naturally into the user's language.\n"
-    "- Preserve URLs, product names (Wifipool, Beniferro, Pool Twin, Pool Duo), and "
-    "technical terms exactly as they appear in the FAQ.\n"
-    "- Cite which FAQ row(s) you relied on in the JSON output.\n\n"
+    "(e.g. 'gen 2', 'oui', 'the first one', '1'), interpret it as an answer to YOUR "
+    "previous question and continue the same topic — do NOT treat it as a new "
+    "independent query.\n"
+    "- Preserve URLs, product names (Wifipool, Beniferro, Pool Twin, Pool Duo, Gen 1, "
+    "Gen 2, Gen 3, Shelly), and technical terms exactly as they appear in the FAQ.\n"
+    "- Cite every contributing FAQ row in 'sources' (array of integers, in the order "
+    "they appear in your answer). Pick the most relevant one as 'primary_source'.\n\n"
     "INTERACTIVE CHOICES:\n"
     "- If your answer asks the user to pick between a small set of options "
     "(e.g. 'Is it a Gen 1 or Gen 2 device?', 'Do you have Pool Twin or Pool Duo?', "
@@ -317,8 +327,45 @@ def _build_expert_messages(question: str, history: Optional[List[Dict[str, str]]
     return msgs
 
 
+_COMPANY_KNOWLEDGE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "app", "data", "company_knowledge.md"
+)
+
+
+def _load_company_knowledge() -> str:
+    """Read the curated company knowledge markdown if present. Empty string on miss."""
+    try:
+        if not os.path.exists(_COMPANY_KNOWLEDGE_PATH):
+            return ""
+        with open(_COMPANY_KNOWLEDGE_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _company_knowledge_mtime() -> float:
+    try:
+        return os.path.getmtime(_COMPANY_KNOWLEDGE_PATH)
+    except OSError:
+        return 0.0
+
+
 def _build_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
     parts: List[str] = []
+
+    # Prepend the curated company knowledge so Claude treats it as part of its
+    # internalized expertise. The whole block is cached server-side via
+    # cache_control so the marginal cost per request stays low.
+    company = _load_company_knowledge()
+    if company:
+        parts.append(
+            "=== COMPANY KNOWLEDGE (Beniferro & Zwembad.eu) ===\n"
+            "The two companies behind this chatbot. Use this content the same "
+            "way you use the FAQ — you know it by heart.\n\n"
+            + company
+        )
+
+    faq_lines: List[str] = []
     for e in entries:
         row = e.get("excel_row")
         q = (e.get("Vraag") or e.get("question") or "").strip()
@@ -326,15 +373,17 @@ def _build_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
         if not q or not a:
             continue
         row_tag = f"[row {row}]" if row else "[row ?]"
-        parts.append(f"{row_tag} Q: {q}\nA: {a}")
+        faq_lines.append(f"{row_tag} Q: {q}\nA: {a}")
+    if faq_lines:
+        parts.append("=== FAQ KNOWLEDGE BASE (335 curated Q/A entries) ===\n" + "\n\n".join(faq_lines))
+
     return "\n\n".join(parts)
 
 
 def _entries_signature(entries: List[Dict[str, Any]]) -> int:
-    """Content-aware signature: detects edits anywhere in the FAQ, not just
-    additions/deletions. Uses a rolling hash over (excel_row, question, answer)
-    of every entry so any edit invalidates the cache."""
-    h = hash(len(entries))
+    """Content-aware signature: detects edits anywhere in the FAQ or in the
+    company knowledge file. Any edit anywhere invalidates the cache."""
+    h = hash((len(entries), _company_knowledge_mtime()))
     for e in entries:
         h ^= hash((
             e.get("excel_row"),
@@ -414,12 +463,24 @@ def expert_answer(
         return {**empty, "error": "empty_faq_context"}
 
     # When the user explicitly picks a language in the UI, the backend passes
-    # that lang_code here and we hard-lock Claude to it. Otherwise Claude
-    # infers the right language from conversation history.
+    # that lang_code here and we hard-lock Claude to it. The language lock is
+    # absolute — even if the user types in another language, we respond in the
+    # UI-selected language.
     system_prompt = _EXPERT_SYSTEM_BASE + (
-        f"\n\nUI LANGUAGE LOCK: the user has explicitly selected {target_lang} "
-        f"as their language. Always respond in {target_lang}, regardless of what "
-        f"language the conversation drifts toward."
+        f"\n\nABSOLUTE LANGUAGE LOCK: You MUST respond ONLY in {target_lang}. "
+        f"This is non-negotiable.\n"
+        f"- If the user writes in Dutch but the UI language is {target_lang}, "
+        f"respond in {target_lang}.\n"
+        f"- If the user writes in French but the UI language is {target_lang}, "
+        f"respond in {target_lang}.\n"
+        f"- If the user mixes languages, respond in {target_lang} only.\n"
+        f"- NEVER mix languages in a single response.\n"
+        f"- NEVER ask the user which language they prefer — the UI already chose "
+        f"{target_lang}.\n"
+        f"- The FAQ knowledge base is mostly in Dutch; translate the relevant "
+        f"facts into {target_lang} naturally before answering.\n"
+        f"Producing a response in any language other than {target_lang} is a "
+        f"critical failure."
     )
 
     try:

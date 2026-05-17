@@ -1470,6 +1470,73 @@ def _enrich_response_with_media(response: Dict[str, Any], row: Optional[dict]) -
     return response
 
 
+def _enrich_response_with_media_multi(response: Dict[str, Any], rows: List[dict]) -> Dict[str, Any]:
+    """Like _enrich_response_with_media but merges media from MULTIPLE rows.
+
+    Used when the expert answer cites several FAQ rows (multi-part question):
+    we want the carousel to show the images of every contributing row, in the
+    order Claude listed them, deduplicated.
+    """
+    if not isinstance(response, dict) or not rows:
+        return response
+
+    image_paths: List[str] = []
+    video_urls: List[str] = []
+    products: List[Dict[str, str]] = []
+    seen_products: Set[str] = set()
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        # Images: prefer image_paths list, fall back to single image_path
+        paths_raw = row.get("image_paths")
+        if isinstance(paths_raw, list):
+            for p in paths_raw:
+                s = (p or "").strip() if isinstance(p, str) else ""
+                if s and s not in image_paths:
+                    image_paths.append(s)
+        single_img = (row.get("image_path") or "").strip()
+        if single_img and single_img not in image_paths:
+            image_paths.append(single_img)
+
+        # Videos: prefer video_urls list, fall back to single video_url
+        videos_raw = row.get("video_urls")
+        if isinstance(videos_raw, list):
+            for v in videos_raw:
+                s = (v or "").strip() if isinstance(v, str) else ""
+                if s and s not in video_urls:
+                    video_urls.append(s)
+        single_vid = (row.get("video_url") or "").strip()
+        if single_vid and single_vid not in video_urls:
+            video_urls.append(single_vid)
+
+        # Product links: dict shape {url, title}
+        products_raw = row.get("product_links")
+        if isinstance(products_raw, list):
+            for it in products_raw:
+                if not isinstance(it, dict):
+                    continue
+                url = (it.get("url") or "").strip()
+                title = (it.get("title") or "").strip()
+                if url and url not in seen_products:
+                    seen_products.add(url)
+                    products.append({"title": title or url, "url": url})
+
+    if image_paths:
+        response.setdefault("image_url", image_paths[0])
+        if len(image_paths) > 1:
+            response.setdefault("image_urls", image_paths)
+    if video_urls:
+        response.setdefault("video_url", video_urls[0])
+        if len(video_urls) > 1:
+            response.setdefault("video_urls", video_urls)
+    if products:
+        response.setdefault("product_links", products)
+
+    return response
+
+
 def _get_faq_suggestions_with_scores(
     user_q: str,
     top_k: int = 4,
@@ -2909,12 +2976,20 @@ def chat(req: ChatRequest, request: Request):
             ex_answer = (ex.get("answer") or "").strip()
             if ex_answer and not ex.get("error"):
                 primary_source = ex.get("primary_source")
-                matched_row = None
+                # Build the ORDERED list of contributing rows: Claude's `sources`
+                # array carries every FAQ row that fed into the answer (for
+                # multi-part questions). primary_source goes first so the
+                # carousel opens on the most relevant photo.
+                source_ids: List[int] = []
                 if isinstance(primary_source, int):
-                    for r in _FAQ:
-                        if r.get("excel_row") == primary_source:
-                            matched_row = r
-                            break
+                    source_ids.append(primary_source)
+                for sid in (ex.get("sources") or []):
+                    if isinstance(sid, int) and sid not in source_ids:
+                        source_ids.append(sid)
+                # Build a quick excel_row -> row lookup, then materialize in order.
+                row_by_excel = {r.get("excel_row"): r for r in _FAQ if r.get("excel_row") is not None}
+                matched_rows: List[dict] = [row_by_excel[sid] for sid in source_ids if sid in row_by_excel]
+                matched_row = matched_rows[0] if matched_rows else None
                 citations = []
                 if matched_row:
                     try:
@@ -2929,8 +3004,11 @@ def chat(req: ChatRequest, request: Request):
                 }
                 if ex.get("out_of_scope"):
                     response["source"] = "expert_out_of_scope"
-                if matched_row:
-                    _enrich_response_with_media(response, matched_row)
+                # Attach media from EVERY contributing row, not just primary_source,
+                # so multi-part answers show all relevant images / videos in the
+                # carousel (in the order Claude cited them).
+                if matched_rows:
+                    _enrich_response_with_media_multi(response, matched_rows)
                 alt_qs = ex.get("alternative_questions") or []
                 if ex.get("ambiguous") and alt_qs:
                     response["clarify"] = {"ref": q, "options": alt_qs, "tips": []}
