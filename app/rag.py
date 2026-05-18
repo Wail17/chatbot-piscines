@@ -289,15 +289,42 @@ _EXPERT_SYSTEM_BASE = (
     "  4. If one of the sub-questions is not covered by the FAQ, say so for that "
     "specific part instead of substituting an unrelated row.\n\n"
     "STRICT RULES:\n"
-    "- Use ONLY information from the COMPANY KNOWLEDGE and FAQ KNOWLEDGE BASE "
-    "below. Never invent procedures, error codes, part numbers, serial numbers, "
-    "URLs, or contact details.\n"
-    "- ANTI-SUBSTITUTION RULE: Before answering, identify the EXACT topic of the "
-    "user's question. Only answer if a FAQ row or company knowledge entry covers "
-    "THAT exact topic. NEVER substitute a related-but-different row (e.g. user "
-    "asks 'how to raise my pH' — do NOT answer with 'pH alarm troubleshooting' "
-    "just because both mention pH). If the exact topic is not in the knowledge, "
-    "say so honestly in the user's language and set primary_source=null.\n"
+    "- The FAQ + COMPANY KNOWLEDGE is your PRIMARY source. ALWAYS scan it first, "
+    "carefully and exhaustively, before considering anything else.\n"
+    "- VERIFICATION STEP (mandatory, do this silently before writing the answer):\n"
+    "  a) Identify the precise topic of the user's question (e.g. 'how to RAISE "
+    "pH' vs 'pH alarm troubleshooting' vs 'pH measurement deviation' — these are "
+    "DIFFERENT topics).\n"
+    "  b) Scan EVERY relevant FAQ row. For each candidate row, ask: 'Does this "
+    "row's Q address the user's exact topic?' Not 'does it share keywords' — does "
+    "it actually answer THAT question.\n"
+    "  c) If yes → use it as a source. If no → discard and keep searching.\n"
+    "  d) If no row in the FAQ truly addresses the topic, do NOT substitute a "
+    "related row. Either use web_search (see below) or admit you don't know.\n"
+    "- ANTI-SUBSTITUTION RULE: Picking a related-but-wrong row is the WORST "
+    "failure mode (e.g. user asks 'how to raise my pH' — do NOT answer with 'pH "
+    "alarm troubleshooting' just because both mention pH). If in doubt, say "
+    "'I don't have that exact info in my knowledge — let me check.' and use "
+    "web_search if the topic is pool-related.\n"
+    "- OUT-OF-SCOPE OVERRIDES EVERYTHING: Before considering web_search, check "
+    "if the question is even on-topic. Pool, spa, water treatment, water "
+    "chemistry, Wifipool/Beniferro hardware, Zwembad.eu products are ON-TOPIC. "
+    "Geography (capital of Belgium), weather, politics, recipes, jokes, "
+    "general programming, math homework, etc. are OUT-OF-SCOPE — refuse "
+    "politely with out_of_scope=true and DO NOT use web_search for them, "
+    "even if you happen to know the answer from training. The mission is "
+    "pool support only.\n"
+    "- WEB SEARCH FALLBACK (last resort only, ON-TOPIC questions only): If "
+    "the question is on-topic (pool / spa / water-treatment / Wifipool / "
+    "Beniferro) AND after a careful scan of the FAQ + company knowledge no "
+    "answer truly exists, you MAY call the web_search tool to find an "
+    "authoritative answer from external pool-industry sources. Use it AT "
+    "MOST ONCE per question. After the search, synthesize your final answer "
+    "naturally and still output the same JSON shape (sources can stay empty "
+    "if the answer came purely from the web).\n"
+    "- Use ONLY information from the COMPANY KNOWLEDGE, FAQ, or web_search "
+    "results. Never invent procedures, error codes, part numbers, serial "
+    "numbers, URLs, or contact details from thin air.\n"
     "- If the question is outside the pool / spa / water-treatment / Wifipool / "
     "Beniferro / Zwembad.eu domain (weather, general coding, politics, capital of "
     "Belgium, jokes, recipes, …), politely refuse in ONE short sentence in the "
@@ -445,6 +472,25 @@ def _get_expert_faq_context(entries: List[Dict[str, Any]]) -> str:
     return _EXPERT_FAQ_CONTEXT
 
 
+def _concat_text_blocks(blocks: Any) -> str:
+    """Join the .text of every text-type block in an Anthropic response.
+
+    When Claude uses the server-side web_search tool the response.content
+    contains multiple blocks: a server_tool_use, a web_search_tool_result,
+    and one or more text blocks. We only want the text blocks — concatenated
+    in document order — so we can extract the final JSON answer Claude wrote.
+    """
+    if not blocks:
+        return ""
+    out: List[str] = []
+    for b in blocks:
+        if getattr(b, "type", "") == "text":
+            t = getattr(b, "text", "") or ""
+            if t:
+                out.append(t)
+    return "\n\n".join(out).strip()
+
+
 def _extract_json(raw: str) -> Optional[Dict[str, Any]]:
     import json as _json
     s = (raw or "").strip()
@@ -530,12 +576,21 @@ def expert_answer(
                 },
             ],
             messages=_build_expert_messages(question, history),
+            # Server-side web search tool. Claude calls it ONLY when the system
+            # prompt's WEB SEARCH FALLBACK rule applies (i.e. the FAQ + company
+            # knowledge truly don't cover the on-topic question). Anthropic
+            # executes the search; we just read the merged response.
+            tools=[{"name": "web_search", "type": "web_search_20250305", "max_uses": 1}],
         )
-        raw = resp.content[0].text if resp.content else ""
+        raw = _concat_text_blocks(resp.content)
+        used_web_search = any(
+            getattr(b, "type", "") == "server_tool_use" for b in (resp.content or [])
+        )
         logger.info(
             f"expert_answer ok | model={_EXPERT_MODEL} | tokens in/out="
             f"{getattr(resp.usage, 'input_tokens', '?')}/{getattr(resp.usage, 'output_tokens', '?')}"
             f" | cache_read={getattr(resp.usage, 'cache_read_input_tokens', '?')}"
+            f" | web_search={used_web_search}"
         )
     except Exception as e:
         logger.warning(
@@ -547,6 +602,25 @@ def expert_answer(
 
     data = _extract_json(raw)
     if not data:
+        # Recovery: when Claude used web_search it sometimes returns the answer
+        # as natural-language prose instead of the JSON envelope. Treat the raw
+        # text as the answer if it looks substantive (more than a few words).
+        if raw and len(raw.split()) > 5:
+            logger.info(
+                f"expert_answer JSON missing but raw text usable "
+                f"(len={len(raw)}, used_web_search={used_web_search}) — "
+                f"returning raw text as answer"
+            )
+            return {
+                "answer": raw,
+                "sources": [],
+                "primary_source": None,
+                "confidence": 0.5,
+                "out_of_scope": False,
+                "ambiguous": False,
+                "alternative_questions": [],
+                "choices": [],
+            }
         logger.warning(
             f"expert_answer JSON parse failed — Claude returned malformed JSON. "
             f"raw[:300]={raw[:300]!r}"
