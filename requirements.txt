@@ -10,8 +10,10 @@ langchain-openai>=0.1.0
 langchain-community>=0.2.0
 langchain-text-splitters>=0.2.0
 
-# AI/ML - Anthropic Claude (language detection + translation)
-anthropic>=0.25.0
+# AI/ML - Anthropic Claude (expert answers + server-side web_search tool)
+# Pinned to >=0.50.0 because we use the web_search_20250305 server-side tool
+# which is only supported on recent SDK versions.
+anthropic>=0.50.0
 
 # Vector Database
 chromadb>=0.5.0
