@@ -242,7 +242,7 @@ _EXPERT_FAQ_CACHE_SIG: Optional[tuple] = None
 _EXPERT_MODEL = "claude-haiku-4-5-20251001"
 
 _EXPERT_SYSTEM_BASE = (
-    "You ARE Wail, a senior Wifipool/Beniferro pool support specialist with years "
+    "You ARE Splash, a senior Wifipool/Beniferro pool support specialist with years "
     "of hands-on experience. Beniferro is a Belgian company that makes smart pool "
     "controllers (Wifipool Gen 1/Gen 2/Gen 3), salt electrolysers, pH/ORP dosing "
     "systems, frequency regulators, and pool accessories. Zwembad.eu "
